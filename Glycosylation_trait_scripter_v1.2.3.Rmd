@@ -1,0 +1,1041 @@
+---
+title: "Glycosylation traits"
+author: "Copyright 2016-2023 Karli Reiding, Viktoria Dotz, Gerda Vreeker, Guinevere Lageveen-Kammeijer, Marco Bladergroen"
+date: "version: 1.2.3, 2025-03-06, executed `r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding,
+                                                         output_file = file.path(dirname(inputFile), 
+                                                         paste0('Glycosylation Traits ',
+                                                         format(Sys.time(), '%Y-%m-%d %H_%M_%S'), '.html'))) })
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Version history:
+
+Version 0.94 (Karli Reiding, Viktoria Dotz, Gerda Vreeker): 2019-03-27
+<ul>
+Last modified by Viktoria Dotz who found mistakes in the calculation of A4FG and A4F0G\
+Traits that Gerda Vreeker created in 2018 added.
+</ul>
+Version 0.94_GSM (Guinevere Lageveen-Kammeijer): 2020-05-06
+<ul>
+Guinevere added paucimannosidic trait (H3N2), unknown Classification (H3N3F0/1, H3H4F0/1/2), trait ALN and changed the high mannose trait (F=0)
+</ul>
+Versions 0.95/0.96 (Marco Bladergroen): 2021-04-29
+<ul>
+Some calculations simplified, high-mannose (MM): H4N2 added\
+Filenames and settings moved to top of script, excel possibility added.\
+Sialylation dependent on galactosylation extended to 3- and 4-antennary structures\
+Some traits for Visceral Leishmaniasis cohort (Gabriane Porcino) added.
+</ul>
+Version 0.97 (Marco Bladergroen): 2021-06-04
+<ul>Derived_traits_curated added as extra sheet. Columns with all 1, all 0 or all NA removed from derived list</ul>
+Version 0.98 (Marco Bladergroen): 2021-07-01
+<ul>Sheet with all traits combined (direct and derived traits) added to excel output</ul>
+Version 1.0  (Marco Bladergroen): 2022-08-19
+<ul>Format changed from r-script to R-markdown.</ul>
+Version 1.1  (Marco Bladergroen): 2024-04-11
+<ul>Script adapted to mouse glycans (including N-glycolyl neuraminic acid with modifications).</ul>
+Version 1.2.3 (Juan-Carlos Rojas Echeverri): 2025-03-06
+<ul>Missing building blocks added. Calculations moved to beginning of script. (Among other things)</ul>
+
+## Used packages
+```{r packages, message=FALSE, warning=FALSE, include=TRUE}
+library(openxlsx)
+library(stringr)
+library(tidyverse)
+```
+
+## Global variables/settings
+
+```{r settings, include=TRUE}
+wd <- getwd()
+import_file_name <- "<Filename of your curated data>.xlsx"
+sheetName <- "renormalized"
+export_file_name <- paste("<Your output filename>", format(Sys.time(), "%Y-%m-%d %H_%M_%S"), ".xlsx", sep="")
+fname_data = paste(wd,import_file_name,sep="/")
+fname_export = paste(wd,export_file_name,sep="/")
+
+taxonomy <- "human" # other taxonomy possible is mouse/murine
+```
+
+## Requested calculations
+
+```{r requested_calculations, include=TRUE}
+requested_calculations <- matrix("",0,1)
+
+  # Overall glycan types
+  requested_calculations["T"] = "T"
+  requested_calculations["TP"] = "TP / T"
+  requested_calculations["TU"] = "TU / T"
+  requested_calculations["TM"] = "TM / T"
+  requested_calculations["THy"] = "THy / T"
+  requested_calculations["TC"] = "TC / T"
+  requested_calculations["TAc"] = "TAc / T"
+  # requested_calculations["TG"] = "TG / T"
+  # requested_calculations["TS"] = "TS / T"
+  # requested_calculations["MHy"] = "TM / THy"
+  # requested_calculations["TE"] = "TE / TS"
+  # requested_calculations["TL"] = "TL / TS"
+  
+  # High mannose size
+  requested_calculations["MM"] = "( 4 * TM4 + 5 * TM5 + 6 * TM6 + 7 * TM7 + 8 * TM8 + 9 * TM9 + 10 * TM10 + 11 * TM11 + 12 * TM12 ) / TM"
+  
+  # Complex type distribution
+  requested_calculations["CA1"] = "TA1 / TC"
+  requested_calculations["CA2"] = "TA2 / TC"
+  requested_calculations["CA3"] = "TA3 / TC"
+  requested_calculations["CA4"] = "TA4 / TC"
+  #requested_calculations["CF0"] = "TF0 / TC"
+  requested_calculations["CF"] = "TF / TC"
+  #requested_calculations["CFa"] = "TFa / TC"
+  #requested_calculations["CB0"] = "TB0 / TC"
+  requested_calculations["CB"] = "TB / TC"
+  requested_calculations["CG"] = "TG / TC"
+  requested_calculations["CS"] = "TS / TC"
+  #requested_calculations["CE"] = "TE / TC"
+  #requested_calculations["CL"] = "TL / TC"
+  
+  # Underived sums
+  # requested_calculations["TA2FS0"] = "TA2FS0"
+  # requested_calculations["TA2FS"] = "TA2FS"
+  # requested_calculations["TA2FG0S0"] = "TA2FG0S0"
+  # requested_calculations["TA2FG1S0"] = "TA2FG1S0"
+  # requested_calculations["TA2FG2S0"] = "TA2FG2S0"
+  # requested_calculations["TA2L0"] = "TA2L0"
+  # requested_calculations["TA3L0"] = "TA3L0"
+  # requested_calculations["TA4L0"] = "TA4L0"
+  # requested_calculations["TA1L"] = "TA1L"
+  # requested_calculations["TA2L"] = "TA2L"
+  # requested_calculations["TA3L"] = "TA3L"
+  # requested_calculations["TA4L"] = "TA4L"
+  # requested_calculations["TA1E"] = "TA1E"
+  # requested_calculations["TA2E"] = "TA2E"
+  # requested_calculations["TA3E"] = "TA3E"
+  # requested_calculations["TA4E"] = "TA4E"
+  requested_calculations["TA2S"] = "TA2S"
+  requested_calculations["TA3S"] = "TA3S"
+  requested_calculations["TA4S"] = "TA4S"
+  
+  #Antennaerity
+  #requested_calculations["A1"] = "A1"
+  #requested_calculations["A2"] = "A2"
+  #requested_calculations["A3"] = "A3"
+  #requested_calculations["A4"] = "A4"
+  #requested_calculations["TA0"] = "( TP + TM ) / T"
+  #requested_calculations["TA1"] = "TA1"
+  requested_calculations["TA1"] = "A1 / T"
+  requested_calculations["TA2"] = "A2 / T"
+  requested_calculations["TA3"] = "A3 / T"
+  requested_calculations["TA4"] = "A4 / T"
+  #requested_calculations["TALN"] = "ALN / T"
+  #requested_calculations["CA1"] = "( A1 - TU - H5N3 - H5N3F1 - H5N3F1S1 - H5N3S1 - H6N3F1 - H6N3F1S1 - H6N3S1 ) / TC"
+  #requested_calculations["CA2"] = "( A2 - H6N4 ) / TC"
+  #requested_calculations["CA3"] = "A3 / TC"
+  #requested_calculations["CA4"] = "A4 / TC"
+  #requested_calculations["CALN"] = "ALN / TC"
+  
+  
+  # Fucosylation
+  # requested_calculations["TF0"] = "( TM + H3N2 + H3N3 + H4N3 + H5N3 + H5N3S1 + H6N3S1 + H6N4 + TF0 ) / T"
+  # requested_calculations["TF"] = "( H3N2F1 + H3N3F1 + H4N3F1 + H4N3F2 + H5N3F1 + H5N3F1S1 + H6N3F1 + H6N3F1S1 + TF ) / T"
+  requested_calculations["TF"] = "TF / T"
+  # requested_calculations["TF_1"] = "( H3N3F1 + H4N3F1 + H5N3F1 + TF ) / T"
+  # requested_calculations["TFa"] = "( TFa + H4N3F2 ) / T"
+  # requested_calculations["A1F0"] = "TA1F0 / TA1"
+  # requested_calculations["A2F0"] = "TA2F0 / TA2"
+  # requested_calculations["A3F0"] = "TA3F0 / TA3"
+  # requested_calculations["A4F0"] = "TA4F0 / TA4"
+  requested_calculations["A1F"] = "TA1F / TA1"
+  requested_calculations["A2F"] = "TA2F / TA2"
+  requested_calculations["A3F"] = "TA3F / TA3"
+  requested_calculations["A4F"] = "TA4F / TA4"
+  requested_calculations["A1Fa"] = "TA1Fa / TA1"
+  requested_calculations["A2Fa"] = "TA2Fa / TA2"
+  requested_calculations["A3Fa"] = "TA3Fa / TA3"
+  requested_calculations["A4Fa"] = "TA4Fa / TA4"
+  
+  # Fucosylation of (non)sialylated species
+  # requested_calculations["A1S0F"] = "TA1FS0 / TA1S0"
+  requested_calculations["A2S0F"] = "TA2FS0 / TA2S0"
+  requested_calculations["A3S0F"] = "TA3FS0 / TA3S0"
+  requested_calculations["A4S0F"] = "TA4FS0 / TA4S0"
+  # requested_calculations["A1L0F"] = "TA1FL0 / TA1L0"
+  # requested_calculations["A2L0F"] = "TA2FL0 / TA2L0"
+  # requested_calculations["A3L0F"] = "TA3FL0 / TA3L0"
+  # requested_calculations["A4L0F"] = "TA4FL0 / TA4L0"
+  # requested_calculations["A1E0F"] = "TA1FE0 / TA1E0"
+  # requested_calculations["A2E0F"] = "TA2FE0 / TA2E0"
+  # requested_calculations["A3E0F"] = "TA3FE0 / TA3E0"
+  # requested_calculations["A4E0F"] = "TA4FE0 / TA4E0"
+  # requested_calculations["A1SF"] = "TA1FS / TA1S"
+  requested_calculations["A2SF"] = "TA2FS / TA2S"
+  requested_calculations["A3SF"] = "TA3FS / TA3S"
+  requested_calculations["A4SF"] = "TA4FS / TA4S"
+  # requested_calculations["A1LF"] = "TA1FL / TA1L"
+  # requested_calculations["A2LF"] = "TA2FL / TA2L"
+  # requested_calculations["A3LF"] = "TA3FL / TA3L"
+  # requested_calculations["A4LF"] = "TA4FL / TA4L"
+  # requested_calculations["A1EF"] = "TA1FE / TA1E"
+  # requested_calculations["A2EF"] = "TA2FE / TA2E"
+  # requested_calculations["A3EF"] = "TA3FE / TA3E"
+  # requested_calculations["A4EF"] = "TA4FE / TA4E"
+  
+  # Bisection
+  requested_calculations["TB"] = "TA2B / T"
+  requested_calculations["A2B"] = "TA2B / TA2"
+  requested_calculations["A2F0B"] = "TA2F0B / TA2F0"
+  requested_calculations["A2FB"] = "TA2FB / TA2F"
+  requested_calculations["A2S0B"] = "TA2S0B / TA2S0"
+  requested_calculations["A2SB"] = "TA2SB / TA2S"
+  requested_calculations["A2F0S0B"] = "TA2F0S0B / TA2F0S0"
+requested_calculations["A2F0SB"] = "TA2F0SB / TA2F0S"
+  requested_calculations["A2FS0B"] = "TA2FS0B / TA2FS0"
+  requested_calculations["A2FSB"] = "TA2FSB / TA2FS"
+  
+  # Galactosylation
+  requested_calculations["A1G"] = "( 0/1 * TA1G0 + 1/1 * TA1G1 ) / TA1"
+  requested_calculations["A2G"] = "( 0/2 * TA2G0 + 1/2 * TA2G1 + 2/2 * TA2G2 ) / TA2"
+  requested_calculations["A3G"] = "( 0/3 * TA3G0 + 1/3 * TA3G1 + 2/3 * TA3G2 + 3/3 * TA3G3 ) / TA3"
+  requested_calculations["A4G"] = "( 0/4 * TA4G0 + 1/4 * TA4G1 + 2/4 * TA4G2 + 3/4 * TA4G3 + 4/4 * TA4G4 ) / TA4"
+  # requested_calculations["A1F0G"] = "( 0/1 * TA1F0G0 + 1/1 * TA1F0G1 ) / TA1F0"
+  # requested_calculations["A2F0G"] = "( 0/2 * TA2F0G0 + 1/2 * TA2F0G1 + 2/2 * TA2F0G2 ) / TA2F0"
+  # requested_calculations["A3F0G"] = "( 0/3 * TA3F0G0 + 1/3 * TA3F0G1 + 2/3 * TA3F0G2 + 3/3 * TA3F0G3 ) / TA3F0"
+  # requested_calculations["A4F0G"] = "( 0/4 * TA4F0G0 + 1/4 * TA4F0G1 + 2/4 * TA4F0G2 + 3/4 * TA4F0G3 + 4/4 * TA4F0G4 ) / TA4F0"
+  # requested_calculations["A1FG"] = "( 0/1 * TA1FG0 + 1/1 * TA1FG1 ) / TA1F"
+  # requested_calculations["A2FG"] = "( 0/2 * TA2FG0 + 1/2 * TA2FG1 + 2/2 * TA2FG2 ) / TA2F"
+  # requested_calculations["A3FG"] = "( 0/3 * TA3FG0 + 1/3 * TA3FG1 + 2/3 * TA3FG2 + 3/3 * TA3FG3 ) / TA3F"
+  # requested_calculations["A4FG"] = "( 0/4 * TA4FG0 + 1/4 * TA4FG1 + 2/4 * TA4FG2 + 3/4 * TA4FG3 + 4/4 * TA4FG4 ) / TA4F"
+  
+  # Sialylation dependent on galactosylation
+  # requested_calculations["A2S0G"] = "( 0/2 * TA2G0S0 + 1/2 * TA2G1S0 + 2/2 * TA2G2S0 ) / TA2S0"
+  requested_calculations["A2SG"] = "( 0/2 * TA2G0S + 1/2 * TA2G1S + 2/2 * TA2G2S ) / TA2S"   
+  requested_calculations["A2F0S0G"] = "( 0/2 * TA2F0G0S0 + 1/2 * TA2F0G1S0 + 2/2 * TA2F0G2S0 ) / TA2F0S0"
+  requested_calculations["A2FS0G"] = "( 0/2 * TA2FG0S0 + 1/2 * TA2FG1S0 + 2/2 * TA2FG2S0 ) / TA2FS0"
+  requested_calculations["A2F0SG"] = "( 0/2 * TA2F0G0S + 1/2 * TA2F0G1S + 2/2 * TA2F0G2S ) / TA2F0S"
+  requested_calculations["A2FSG"] = "( 0/2 * TA2FG0S + 1/2 * TA2FG1S + 2/2 * TA2FG2S ) / TA2FS"
+  requested_calculations["A3S0G"] = "( 0/3 * TA3G0S0 + 1/3 * TA3G1S0 + 2/3 * TA3G2S0 + 3/3 * TA3G3S0 ) / TA3S0"
+  requested_calculations["A3SG"] = "( 0/3 * TA3G0S + 1/3 * TA3G1S + 2/3 * TA3G2S + 3/3 * TA3G3S ) / TA3S"   
+  requested_calculations["A3F0S0G"] = "( 0/3 * TA3F0G0S0 + 1/3 * TA3F0G1S0 + 2/3 * TA3F0G2S0 + 3/3 * TA3F0G3S0) / TA3F0S0"
+  requested_calculations["A3FS0G"] = "( 0/3 * TA3FG0S0 + 1/3 * TA3FG1S0 + 2/3 * TA2FG2S0 + 3/3 * TA3FG3S0 ) / TA3FS0"
+  requested_calculations["A3F0SG"] = "( 0/3 * TA3F0G0S + 1/3 * TA3F0G1S + 2/3 * TA3F0G2S + 3/3 * TA3F0G3S ) / TA3F0S"
+  requested_calculations["A3FSG"] = "( 0/3 * TA3FG0S + 1/3 * TA3FG1S + 2/3 * TA3FG2S + 3/3 * TA3FG3S ) / TA3FS"
+  requested_calculations["A4S0G"] = "( 0/4 * TA4G0S0 + 1/4 * TA4G1S0 + 2/4 * TA4G2S0 + 3/4 * TA4G3S0 + 4/4 * TA4G4S0  ) / TA4S0"
+  requested_calculations["A4SG"] = "( 0/4 * TA4G0S + 1/4 * TA4G1S + 2/4 * TA4G2S + 3/4 * TA4G3S + 4/4 * TA4G4S ) / TA4S"   
+  requested_calculations["A4F0S0G"] = "( 0/4 * TA4F0G0S0 + 1/4 * TA4F0G1S0 + 2/4 * TA4F0G2S0 + 3/4 * TA4F0G3S0 + 4/4 * TA4F0G4S0 ) / TA4F0S0"
+  requested_calculations["A4FS0G"] = "( 0/4 * TA4FG0S0 + 1/4 * TA4FG1S0 + 2/4 * TA4FG2S0 + 3/4 * TA4FG3S0 + 4/4 * TA4FG4S0 ) / TA4FS0"
+  requested_calculations["A4F0SG"] = "( 0/4 * TA4F0G0S + 1/4 * TA4F0G1S + 2/4 * TA4F0G2S + 3/4 * TA4F0G3S + 4/4 * TA4F0G4S ) / TA4F0S"
+  requested_calculations["A4FSG"] = "( 0/4 * TA4FG0S + 1/4 * TA4FG1S + 2/4 * TA4FG2S + 3/4 * TA4FG3S + 4/4 * TA4FG4S ) / TA4FS"
+  
+  # Sialylation
+  #requested_calculations["A1S"] = "( 0/1 * TA1S0 + 1/1 * TA1S1 ) / TA1"
+  #requested_calculations["TA1S"] = "TA1S1 / T"
+  #requested_calculations["A2S"] = "( 0/2 * TA2S0 + 1/2 * TA2S1 + 2/2 * TA2S2 ) / TA2"
+  #requested_calculations["TA2S"] = "( TA2S1 + TA2S2 ) / T"
+  #requested_calculations["A3S"] = "( 0/3 * TA3S0 + 1/3 * TA3S1 + 2/3 * TA3S2 + 3/3 * TA3S3 ) / TA3"
+  #requested_calculations["TA3S"] = "( TA3S1 + TA3S2 + TA3S3 ) / T"
+  #requested_calculations["A4S"] = "( 0/4 * TA4S0 + 1/4 * TA4S1 + 2/4 * TA4S2 + 3/4 * TA4S3 + 4/4 * TA4S4 ) / TA4"
+  #requested_calculations["TA4S"] = "( TA4S1 + TA4S2 + TA4S3 + TA4S4 ) / T"
+  # requested_calculations["A1F0S"] = "( 0/1 * TA1F0S0 + 1/1 * TA1F0S1 ) / TA1F0"
+  requested_calculations["A2F0S"] = "( 0/2 * TA2F0S0 + 1/2 * TA2F0S1 + 2/2 * TA2F0S2 ) / TA2F0"
+  requested_calculations["A3F0S"] = "( 0/3 * TA3F0S0 + 1/3 * TA3F0S1 + 2/3 * TA3F0S2 + 3/3 * TA3F0S3 ) / TA3F0"
+  requested_calculations["A4F0S"] = "( 0/4 * TA4F0S0 + 1/4 * TA4F0S1 + 2/4 * TA4F0S2 + 3/4 * TA4F0S3 + 4/4 * TA4F0S4 ) / TA4"
+  # requested_calculations["A1FS"] = "( 0/1 * TA1FS0 + 1/1 * TA1FS1 ) / TA1F"
+  requested_calculations["A2FS"] = "( 0/2 * TA2FS0 + 1/2 * TA2FS1 + 2/2 * TA2FS2 ) / TA2F"
+  requested_calculations["A3FS"] = "( 0/3 * TA3FS0 + 1/3 * TA3FS1 + 2/3 * TA3FS2 + 3/3 * TA3FS3 ) / TA3F"
+  requested_calculations["A4FS"] = "( 0/4 * TA4FS0 + 1/4 * TA4FS1 + 2/4 * TA4FS2 + 3/4 * TA4FS3 + 4/4 * TA4FS4 ) / TA4"
+  
+  # Alpha2,3-linked sialylation
+  requested_calculations["A1L"] = "( 0/1 * TA1L0 + 1/1 * TA1L1 ) / TA1"
+  requested_calculations["A2L"] = "( 0/2 * TA2L0 + 1/2 * TA2L1 + 2/2 * TA2L2 ) / TA2"
+  requested_calculations["A3L"] = "( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 ) / TA3"
+  requested_calculations["A4L"] = "( 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / TA4"
+  # requested_calculations["A1Gl"] = "( 0/1 * TA1Gl0 + 1/1 * TA1Gl1 ) / TA1"
+  # requested_calculations["A2Gl"] = "( 0/2 * TA2Gl0 + 1/2 * TA2Gl1 + 2/2 * TA2Gl2 ) / TA2"
+  # requested_calculations["A3Gl"] = "( 0/3 * TA3Gl0 + 1/3 * TA3Gl1 + 2/3 * TA3Gl2 + 3/3 * TA3Gl3 ) / TA3"
+  # requested_calculations["A4Gl"] = "( 0/4 * TA4Gl0 + 1/4 * TA4Gl1 + 2/4 * TA4Gl2 + 3/4 * TA4Gl3 + 4/4 * TA4Gl4 ) / TA4"
+  # requested_calculations["A1F0L"] = "( 0/1 * TA1F0L0 + 1/1 * TA1F0L1 ) / TA1F0"
+  # requested_calculations["A2F0L"] = "( 0/2 * TA2F0L0 + 1/2 * TA2F0L1 + 2/2 * TA2F0L2 ) / TA2F0"
+  # requested_calculations["A3F0L"] = "( 0/3 * TA3F0L0 + 1/3 * TA3F0L1 + 2/3 * TA3F0L2 + 3/3 * TA3F0L3 ) / TA3F0"
+  # requested_calculations["A4F0L"] = "( 0/4 * TA4F0L0 + 1/4 * TA4F0L1 + 2/4 * TA4F0L2 + 3/4 * TA4F0L3 + 4/4 * TA4F0L4 ) / TA4"
+  # requested_calculations["A1FL"] = "( 0/1 * TA1FL0 + 1/1 * TA1FL1 ) / TA1F"
+  # requested_calculations["A2FL"] = "( 0/2 * TA2FL0 + 1/2 * TA2FL1 + 2/2 * TA2FL2 ) / TA2F"
+  # requested_calculations["A3FL"] = "( 0/3 * TA3FL0 + 1/3 * TA3FL1 + 2/3 * TA3FL2 + 3/3 * TA3FL3 ) / TA3F"
+  # requested_calculations["A4FL"] = "( 0/4 * TA4FL0 + 1/4 * TA4FL1 + 2/4 * TA4FL2 + 3/4 * TA4FL3 + 4/4 * TA4FL4 ) / TA4"
+  # requested_calculations["AL"] = "( ( 0/1 * TA1L0 + 1/1 * TA1L1 ) / TA1 + ( 0/2 * TA2L0 + 1/2 * TA2L1 + 2/2 * TA2L2 ) / TA2 + ( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 ) / TA3 + ( 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / TA4 ) / ( ( 0/1 * TA1L0 + 1/1 * TA1L1 ) / TA1 + ( 0/2 * TA2L0 + 1/2 * TA2L1 + 2/2 * TA2L2 ) / TA2 + ( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 ) / TA3 + ( 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / TA4 + ( 0/1 * TA1E0 + 1/1 * TA1E1 ) / TA1 + ( 0/2 * TA2E0 + 1/2 * TA2E1 + 2/2 * TA2E2 ) / TA2 + ( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 ) / TA3 + ( 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / TA4 )"
+  #This last trait includes all sialic acids, while the main changes in Gabriane's project seemed to be A3 and A4-linked (multi-antennary glycans)
+  
+  # Alpha2,6-linked sialylation
+  requested_calculations["A1E"] = "( 0/1 * TA1E0 + 1/1 * TA1E1 ) / TA1"
+  requested_calculations["A2E"] = "( 0/2 * TA2E0 + 1/2 * TA2E1 + 2/2 * TA2E2 ) / TA2"
+  requested_calculations["A3E"] = "( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 ) / TA3"
+  requested_calculations["A4E"] = "( 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / TA4"
+  # requested_calculations["A1Ge"] = "( 0/1 * TA1Ge0 + 1/1 * TA1Ge1 ) / TA1"
+  # requested_calculations["A2Ge"] = "( 0/2 * TA2Ge0 + 1/2 * TA2Ge1 + 2/2 * TA2Ge2 ) / TA2"
+  # requested_calculations["A3Ge"] = "( 0/3 * TA3Ge0 + 1/3 * TA3Ge1 + 2/3 * TA3Ge2 + 3/3 * TA3Ge3 ) / TA3"
+  # requested_calculations["A4Ge"] = "( 0/4 * TA4Ge0 + 1/4 * TA4Ge1 + 2/4 * TA4Ge2 + 3/4 * TA4Ge3 + 4/4 * TA4Ge4 ) / TA4"
+  # requested_calculations["A1F0E"] = "( 0/1 * TA1F0E0 + 1/1 * TA1F0E1 ) / TA1F0"
+  # requested_calculations["A2F0E"] = "( 0/2 * TA2F0E0 + 1/2 * TA2F0E1 + 2/2 * TA2F0E2 ) / TA2F0"
+  # requested_calculations["A3F0E"] = "( 0/3 * TA3F0E0 + 1/3 * TA3F0E1 + 2/3 * TA3F0E2 + 3/3 * TA3F0E3 ) / TA3F0"
+  # requested_calculations["A4F0E"] = "( 0/4 * TA4F0E0 + 1/4 * TA4F0E1 + 2/4 * TA4F0E2 + 3/4 * TA4F0E3 + 4/4 * TA4F0E4 ) / TA4"
+  # requested_calculations["A1FE"] = "( 0/1 * TA1FE0 + 1/1 * TA1FE1 ) / TA1F"
+  # requested_calculations["A2FE"] = "( 0/2 * TA2FE0 + 1/2 * TA2FE1 + 2/2 * TA2FE2 ) / TA2F"
+  # requested_calculations["A3FE"] = "( 0/3 * TA3FE0 + 1/3 * TA3FE1 + 2/3 * TA3FE2 + 3/3 * TA3FE3 ) / TA3F"
+  # requested_calculations["A4FE"] = "( 0/4 * TA4FE0 + 1/4 * TA4FE1 + 2/4 * TA4FE2 + 3/4 * TA4FE3 + 4/4 * TA4FE4 ) / TA4"
+  # requested_calculations["AE"] = "( ( 0/1 * TA1E0 + 1/1 * TA1E1 ) / TA1 + ( 0/2 * TA2E0 + 1/2 * TA2E1 + 2/2 * TA2E2 ) / TA2 + ( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 ) / TA3 + ( 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / TA4 ) / ( ( 0/1 * TA1L0 + 1/1 * TA1L1 ) / TA1 + ( 0/2 * TA2L0 + 1/2 * TA2L1 + 2/2 * TA2L2 ) / TA2 + ( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 ) / TA3 + ( 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / TA4 + ( 0/1 * TA1E0 + 1/1 * TA1E1 ) / TA1 + ( 0/2 * TA2E0 + 1/2 * TA2E1 + 2/2 * TA2E2 ) / TA2 + ( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 ) / TA3 + ( 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / TA4 )"
+  #This last trait includes all sialic acids, while the main changes in Gabriane's project seemed to be A3 and A4-linked (multi-antennary glycans)
+  
+  # Sialylation per galactose
+  # requested_calculations["A1GS"] = "( ( 0/1 * TA1S0 + 1/1 * TA1S1 ) / TA1 ) / ( ( 0/1 * TA1G0 + 1/1 * TA1G1 ) / TA1 )"
+  # requested_calculations["A2GS"] = "( ( 0/2 * TA2S0 + 1/2 * TA2S1 + 2/2 * TA2S2 ) / TA2 ) / ( ( 0/2 * TA2G0 + 1/2 * TA2G1 + 2/2 * TA2G2 ) / TA2 )"
+  # requested_calculations["A3GS"] = "( ( 0/3 * TA3S0 + 1/3 * TA3S1 + 2/3 * TA3S2 + 3/3 * TA3S3 ) / TA3 ) / ( ( 0/3 * TA3G0 + 1/3 * TA3G1 + 2/3 * TA3G2 + 3/3 * TA3G3 ) / TA3 )"
+  # requested_calculations["A4GS"] = "( ( 0/4 * TA4S0 + 1/4 * TA4S1 + 2/4 * TA4S2 + 3/4 * TA4S3 + 4/4 * TA4S4 ) / TA4 ) / ( ( 0/4 * TA4G0 + 1/4 * TA4G1 + 2/4 * TA4G2 + 3/4 * TA4G3 + 4/4 * TA4G4 ) / TA4 )"
+  # requested_calculations["A1F0GS"] = "( ( 0/1 * TA1F0S0 + 1/1 * TA1F0S1 ) / TA1F0 ) / ( ( 0/1 * TA1F0G0 + 1/1 * TA1F0G1 ) / TA1F0 )"
+  # requested_calculations["A2F0GS"] = "( ( 0/2 * TA2F0S0 + 1/2 * TA2F0S1 + 2/2 * TA2F0S2 ) / TA2F0 ) / ( ( 0/2 * TA2F0G0 + 1/2 * TA2F0G1 + 2/2 * TA2F0G2 ) / TA2F0 )"
+  # requested_calculations["A3F0GS"] = "( ( 0/3 * TA3F0S0 + 1/3 * TA3F0S1 + 2/3 * TA3F0S2 + 3/3 * TA3F0S3 ) / TA3F0 ) / ( ( 0/3 * TA3F0G0 + 1/3 * TA3F0G1 + 2/3 * TA3F0G2 + 3/3 * TA3F0G3 ) / TA3F0 )"
+  # requested_calculations["A4F0GS"] = "( ( 0/4 * TA4F0S0 + 1/4 * TA4F0S1 + 2/4 * TA4F0S2 + 3/4 * TA4F0S3 + 4/4 * TA4F0S4 ) / TA4 ) / ( ( 0/4 * TA4F0G0 + 1/4 * TA4F0G1 + 2/4 * TA4F0G2 + 3/4 * TA4F0G3 + 4/4 * TA4F0G4 ) / TA4 )"
+  # requested_calculations["A1FGS"] = "( ( 0/1 * TA1FS0 + 1/1 * TA1FS1 ) / TA1F ) / ( ( 0/1 * TA1FG0 + 1/1 * TA1FG1 ) / TA1F )"
+  # requested_calculations["A2FGS"] = "( ( 0/2 * TA2FS0 + 1/2 * TA2FS1 + 2/2 * TA2FS2 ) / TA2F ) / ( ( 0/2 * TA2FG0 + 1/2 * TA2FG1 + 2/2 * TA2FG2 ) / TA2F )"
+  # requested_calculations["A3FGS"] = "( ( 0/3 * TA3FS0 + 1/3 * TA3FS1 + 2/3 * TA3FS2 + 3/3 * TA3FS3 ) / TA3F ) / ( ( 0/3 * TA3FG0 + 1/3 * TA3FG1 + 2/3 * TA3FG2 + 3/3 * TA3FG3 ) / TA3F )"
+  # requested_calculations["A4FGS"] = "( ( 0/4 * TA4FS0 + 1/4 * TA4FS1 + 2/4 * TA4FS2 + 3/4 * TA4FS3 + 4/4 * TA4FS4 ) / TA4 ) / ( ( 0/4 * TA4FG0 + 1/4 * TA4FG1 + 2/4 * TA4FG2 + 3/4 * TA4FG3 + 4/4 * TA4FG4 ) / TA4 )"
+  
+  # Alpha2,3-linked sialylation per galactose
+  # requested_calculations["A1GL"] = "( ( 0/1 * TA1L0 + 1/1 * TA1L1 ) / TA1 ) / ( ( 0/1 * TA1G0 + 1/1 * TA1G1 ) / TA1 )"
+  # requested_calculations["A2GL"] = "( ( 0/2 * TA2L0 + 1/2 * TA2L1 + 2/2 * TA2L2 ) / TA2 ) / ( ( 0/2 * TA2G0 + 1/2 * TA2G1 + 2/2 * TA2G2 ) / TA2 )"
+  # requested_calculations["A3GL"] = "( ( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 ) / TA3 ) / ( ( 0/3 * TA3G0 + 1/3 * TA3G1 + 2/3 * TA3G2 + 3/3 * TA3G3 ) / TA3 )"
+  # requested_calculations["A4GL"] = "( ( 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / TA4 ) / ( ( 0/4 * TA4G0 + 1/4 * TA4G1 + 2/4 * TA4G2 + 3/4 * TA4G3 + 4/4 * TA4G4 ) / TA4 )"
+  # requested_calculations["A1F0GL"] = "( ( 0/1 * TA1F0L0 + 1/1 * TA1F0L1 ) / TA1F0 ) / ( ( 0/1 * TA1F0G0 + 1/1 * TA1F0G1 ) / TA1F0 )"
+  # requested_calculations["A2F0GL"] = "( ( 0/2 * TA2F0L0 + 1/2 * TA2F0L1 + 2/2 * TA2F0L2 ) / TA2F0 ) / ( ( 0/2 * TA2F0G0 + 1/2 * TA2F0G1 + 2/2 * TA2F0G2 ) / TA2F0 )"
+  # requested_calculations["A3F0GL"] = "( ( 0/3 * TA3F0L0 + 1/3 * TA3F0L1 + 2/3 * TA3F0L2 + 3/3 * TA3F0L3 ) / TA3F0 ) / ( ( 0/3 * TA3F0G0 + 1/3 * TA3F0G1 + 2/3 * TA3F0G2 + 3/3 * TA3F0G3 ) / TA3F0 )"
+  # requested_calculations["A4F0GL"] = "( ( 0/4 * TA4F0L0 + 1/4 * TA4F0L1 + 2/4 * TA4F0L2 + 3/4 * TA4F0L3 + 4/4 * TA4F0L4 ) / TA4 ) / ( ( 0/4 * TA4F0G0 + 1/4 * TA4F0G1 + 2/4 * TA4F0G2 + 3/4 * TA4F0G3 + 4/4 * TA4F0G4 ) / TA4 )"
+  # requested_calculations["A1FGL"] = "( ( 0/1 * TA1FL0 + 1/1 * TA1FL1 ) / TA1F ) / ( ( 0/1 * TA1FG0 + 1/1 * TA1FG1 ) / TA1F )"
+  # requested_calculations["A2FGL"] = "( ( 0/2 * TA2FL0 + 1/2 * TA2FL1 + 2/2 * TA2FL2 ) / TA2F ) / ( ( 0/2 * TA2FG0 + 1/2 * TA2FG1 + 2/2 * TA2FG2 ) / TA2F )"
+  # requested_calculations["A3FGL"] = "( ( 0/3 * TA3FL0 + 1/3 * TA3FL1 + 2/3 * TA3FL2 + 3/3 * TA3FL3 ) / TA3F ) / ( ( 0/3 * TA3FG0 + 1/3 * TA3FG1 + 2/3 * TA3FG2 + 3/3 * TA3FG3 ) / TA3F )"
+  # requested_calculations["A4FGL"] = "( ( 0/4 * TA4FL0 + 1/4 * TA4FL1 + 2/4 * TA4FL2 + 3/4 * TA4FL3 + 4/4 * TA4FL4 ) / TA4 ) / ( ( 0/4 * TA4FG0 + 1/4 * TA4FG1 + 2/4 * TA4FG2 + 3/4 * TA4FG3 + 4/4 * TA4FG4 ) / TA4 )"
+  
+  # Alpha2,6-linked sialylation per galactose
+  # requested_calculations["A1GE"] = "( ( 0/1 * TA1E0 + 1/1 * TA1E1 ) / TA1 ) / ( ( 0/1 * TA1G0 + 1/1 * TA1G1 ) / TA1 )"
+  # requested_calculations["A2GE"] = "( ( 0/2 * TA2E0 + 1/2 * TA2E1 + 2/2 * TA2E2 ) / TA2 ) / ( ( 0/2 * TA2G0 + 1/2 * TA2G1 + 2/2 * TA2G2 ) / TA2 )"
+  # requested_calculations["A3GE"] = "( ( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 ) / TA3 ) / ( ( 0/3 * TA3G0 + 1/3 * TA3G1 + 2/3 * TA3G2 + 3/3 * TA3G3 ) / TA3 )"
+  # requested_calculations["A4GE"] = "( ( 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / TA4 ) / ( ( 0/4 * TA4G0 + 1/4 * TA4G1 + 2/4 * TA4G2 + 3/4 * TA4G3 + 4/4 * TA4G4 ) / TA4 )"
+  # requested_calculations["A1F0GE"] = "( ( 0/1 * TA1F0E0 + 1/1 * TA1F0E1 ) / TA1F0 ) / ( ( 0/1 * TA1F0G0 + 1/1 * TA1F0G1 ) / TA1F0 )"
+  # requested_calculations["A2F0GE"] = "( ( 0/2 * TA2F0E0 + 1/2 * TA2F0E1 + 2/2 * TA2F0E2 ) / TA2F0 ) / ( ( 0/2 * TA2F0G0 + 1/2 * TA2F0G1 + 2/2 * TA2F0G2 ) / TA2F0 )"
+  # requested_calculations["A3F0GE"] = "( ( 0/3 * TA3F0E0 + 1/3 * TA3F0E1 + 2/3 * TA3F0E2 + 3/3 * TA3F0E3 ) / TA3F0 ) / ( ( 0/3 * TA3F0G0 + 1/3 * TA3F0G1 + 2/3 * TA3F0G2 + 3/3 * TA3F0G3 ) / TA3F0 )"
+  # requested_calculations["A4F0GE"] = "( ( 0/4 * TA4F0E0 + 1/4 * TA4F0E1 + 2/4 * TA4F0E2 + 3/4 * TA4F0E3 + 4/4 * TA4F0E4 ) / TA4 ) / ( ( 0/4 * TA4F0G0 + 1/4 * TA4F0G1 + 2/4 * TA4F0G2 + 3/4 * TA4F0G3 + 4/4 * TA4F0G4 ) / TA4 )"
+  # requested_calculations["A1FGE"] = "( ( 0/1 * TA1FE0 + 1/1 * TA1FE1 ) / TA1F ) / ( ( 0/1 * TA1FG0 + 1/1 * TA1FG1 ) / TA1F )"
+  # requested_calculations["A2FGE"] = "( ( 0/2 * TA2FE0 + 1/2 * TA2FE1 + 2/2 * TA2FE2 ) / TA2F ) / ( ( 0/2 * TA2FG0 + 1/2 * TA2FG1 + 2/2 * TA2FG2 ) / TA2F )"
+  # requested_calculations["A3FGE"] = "( ( 0/3 * TA3FE0 + 1/3 * TA3FE1 + 2/3 * TA3FE2 + 3/3 * TA3FE3 ) / TA3F ) / ( ( 0/3 * TA3FG0 + 1/3 * TA3FG1 + 2/3 * TA3FG2 + 3/3 * TA3FG3 ) / TA3F )"
+  # requested_calculations["A4FGE"] = "( ( 0/4 * TA4FE0 + 1/4 * TA4FE1 + 2/4 * TA4FE2 + 3/4 * TA4FE3 + 4/4 * TA4FE4 ) / TA4 ) / ( ( 0/4 * TA4FG0 + 1/4 * TA4FG1 + 2/4 * TA4FG2 + 3/4 * TA4FG3 + 4/4 * TA4FG4 ) / TA4 )"
+  
+  # New traits added for breast cancer cohort
+  # requested_calculations["A34F"] = "( TA3F + TA4F ) / ( TA3 + TA4 )"
+  # requested_calculations["CA"] = "( 1 * TA1 + 2 * TA2 + 3 * TA3 + 4 * TA4 ) / TC" # Average number of antennas in the complex type glycans
+  # #requested_calculations["THyM"] = "( THy + TM ) / T"
+  # requested_calculations["A34L"] = "( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 + 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / ( TA3 + TA4 )"
+  # requested_calculations["A34E"] = "( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 + 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / ( TA3 + TA4 )"
+  
+  # New traits added for Visceral cohort
+  #requested_calculations["A34EL"] = "( TA3E + TA4E ) / ( TA3L + TA4L )"
+  #requested_calculations["A34LE"] = "( TA3L + TA4L ) / ( TA3E + TA4E )"
+  #requested_calculations["TA34L"] = "(( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 + 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / ( TA3 + TA4 )) / ((( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 + 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / ( TA3 + TA4 )) + (( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 + 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / ( TA3 + TA4 )))"
+  #requested_calculations["TA34E"] = "(( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 + 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / ( TA3 + TA4 )) / ((( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 + 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / ( TA3 + TA4 )) + (( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 + 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / ( TA3 + TA4 )))"
+  #requested_calculations["TA34S"] = "(( 0/3 * TA3L0 + 1/3 * TA3L1 + 2/3 * TA3L2 + 3/3 * TA3L3 + 0/4 * TA4L0 + 1/4 * TA4L1 + 2/4 * TA4L2 + 3/4 * TA4L3 + 4/4 * TA4L4 ) / ( TA3 + TA4 )) + (( 0/3 * TA3E0 + 1/3 * TA3E1 + 2/3 * TA3E2 + 3/3 * TA3E3 + 0/4 * TA4E0 + 1/4 * TA4E1 + 2/4 * TA4E2 + 3/4 * TA4E3 + 4/4 * TA4E4 ) / ( TA3 + TA4 ))"
+  
+  # IgG traits
+  #requested_calculations["total_IgG_galactosylation"] = "(( H5N4F1 + H5N5F1 + H5N4 + H5N4F1E1 + H5N4L1 + H5N4E1 + H5N4F1E2 + H5N4F1L1E1 ) + ( 1/2 * ( H4N4F1 + H4N5F1 + H4N4 + H4N5 + H4N4F1E1 + H4N5F1E1 + H4N5E1 ))) / T "
+  #requested_calculations["IgG1_bisection"] = "( H3N5F1 + H4N5F1 + H5N5F1 + H3N5 + H4N5 + H5N5 + H4N5F1E1 + H5N5F1E1 + H4N5E1 ) / T "
+```
+
+## Functions
+
+```{r functions, include=TRUE}
+split_nums_chars = function(string){
+  # Splits a string into subsequent number and letter blocks
+  
+  chars = c()
+  nums = c()
+  last_type = "None"  
+  for (i in seq(nchar(string))){
+    
+    substring = substr(string,i,i)
+    
+    if (grepl("[0-9]",substring)){
+      if (last_type == "number"){
+        nums[length(nums)] = paste(nums[length(nums)],substring,sep="")
+      }
+      else {
+        nums = c(nums,substring)
+        last_type = "number"
+      }  
+    }
+    else {
+      if (last_type == "letter"){
+        chars[length(chars)] = paste(chars[length(chars)],substring,sep="")
+      }
+      else {
+        chars = c(chars,substring)
+        last_type = "letter"
+      }
+    } 
+  }
+  
+  output = c()
+  output$chars = chars
+  output$nums = nums
+  
+  return(output) 
+}
+
+getmatrix_blocks_per_trait = function(traits){
+  # Returns matrix of blocks found in traits
+  
+  blocks = c("F","H","N","S","L","E","Gl","Ge","Ac","P","eGlcA")
+  
+  matrix_output = matrix(0,length(traits),length(blocks))
+  colnames(matrix_output) = blocks
+  rownames(matrix_output) = traits  
+  
+  for(trait in traits){
+    trait_split = split_nums_chars(trait)
+    for (i in seq(length(trait_split$chars))){
+      char = trait_split$chars[i]
+      num = as.numeric(trait_split$nums[i])  
+      matrix_output[trait,char] = num
+    }
+  }
+  
+  return(matrix_output)
+}
+
+trait_has_prop = function(matrix_traits,trait,prop){
+  # Return 1 if trait matches a property. Else return 0.
+  
+  p = prop
+  t = matrix_traits[trait,]
+  result = 0
+  
+  ### Overall glycan type
+  if (p == "T"){
+    result = 1
+  } 
+  else if (p == "PM"){
+    if (t["H"] == 3 && t["N"] == 2){
+      result = 1
+    }
+  } 
+  else if (p == "U"){
+    if ((t["H"] == 3 && t["N"] == 3) ||
+        (t["N"] == 3 && t["H"] <= 4 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] == 0)){
+      result = 1
+    }
+  }
+  else if (p == "M"){
+    if (t["H"] > 3 && t["N"] == 2){
+      result = 1
+    }
+  }
+  else if (p == "Hy"){
+    if(taxonomy=="human"){
+      if (t["H"] > t["N"] + 1 && t["N"] > 2 && t["H"] <= t["N"] + 3){
+            result = 1
+      }
+    }
+    else {
+      if ((t["H"] > t["N"] + 1 && t["N"] == 3 && t["H"] <= 9) || (t["H"] > t["N"] + 1 && t["N"] == 4 && t["H"] > 6 && t["H"] <= 9)){
+        result = 1
+      }
+    }
+  }
+  else if (p == "C"){
+    if(taxonomy=="human"){
+      if ((t["N"] > 3 && t["H"] < t["N"] + 2) || (t["N"] == 3 && t["H"] <= 4 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] >= 1)){
+        result = 1
+      }
+    } else{
+        if ((t["N"] > 3 && t["H"] < ((t["N"] - 2)*2)+4) || (t["N"] == 3 && t["H"] <= 4 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] >= 1)){
+        result = 1
+      }
+    }
+  }
+  
+  ### Mannosity
+  else if (p == paste("M",gsub(".*?([0-9]+)$", "\\1", p),sep="") && as.numeric(gsub(".*?([0-9]+)$", "\\1", p))>3){
+    if (t["N"] == 2 && t["H"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  
+  ### Antennarity
+  else if (p == "B0"){
+    if (t["N"] == 4){
+      result = 1
+    }
+  }
+  else if (p == "B"){
+    if (t["N"] == 5 && t["H"] <= t["N"]){
+      result = 1
+    }
+  }  
+  else if (p == "A1"){
+    if (t["N"] == 3){
+      result = 1
+    }
+  }  
+  else if (p == "A2"){
+    if (t["N"] == 4 || (t["N"] == 5 && t["H"] <= t["N"])){
+      result = 1
+    }
+  }   
+  else if (p == "A3"){
+    if (t["N"] == 5 && !(t["N"] == 5 && t["H"] <= t["N"])){
+      result = 1
+    }
+  }  
+  else if (p == "A4"){
+    if (t["N"] == 6){
+      result = 1
+    }    
+  }
+  else if (p == "ALN"){
+    if (t["N"] > 6 && t["H"] == t["N"] + 1){
+      result = 1
+    }
+  }
+  
+  ### Galactosylation
+  else if (p == "G0"){
+    if (t["N"] >= 3 && t["H"] == 3 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] == 0){
+      result = 1
+    }    
+  }
+  else if (p == "G1"){
+    if ((t["N"] >= 3 && t["H"] == 4) || (t["N"] == 3 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] != 0) ||
+          (t["N"] == 3 && t["H"] >= 5)){
+      result = 1
+    }    
+  }
+  else if (p == "G2"){
+    if ((t["N"] >= 4 && t["H"] == 5) || (t["N"] == 4 && t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] == 2)) {
+      result = 1
+    }    
+  }
+  else if (p == "G3"){
+    if (t["N"] >= 5 && t["H"] == 6){
+      result = 1
+    }    
+  }
+  else if (p == "G4"){
+    if (t["N"] >= 6 && t["H"] == 7){
+      result = 1
+    }   
+  }
+  
+  else if (p == "G"){
+    if ((t["H"] >= t["N"] && t["N"] > 2) || (t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] >= 1) ||
+          (t["N"] == 5 && t["H"] == 4)){
+      result = 1
+    }    
+  }
+  
+  ### Sialylation
+  # Total sialylation
+  # S0-S4
+  else if (p == "S0"){
+    if (t["S"] + t["E"] + t["L"] + t["Ge"] + t["Gl"] == 0){
+      result = 1
+    }
+  }
+  else if (p == paste("S",gsub(".*?([1-9]+)$", "\\1", p),sep="")){
+    if ((t["S"] == as.numeric(gsub(".*?([1-9]+)$", "\\1", p))) || (t["E"] + t["L"] + t["Ge"] + t["Gl"] == as.numeric(gsub(".*?([1-9]+)$", "\\1", p)))){
+      result = 1
+    }
+  }  
+  else if (p == "S"){
+    if ((t["S"] >= 1) || (t["E"] + t["L"] + t["Ge"] + t["Gl"] >= 1)){
+      result = 1
+    }
+  }
+  
+  # Alpha2,3-linked sialylation
+  #L0-L4
+  else if (p == paste("L",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["L"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "L"){
+    if (t["L"] >= 1){
+      result = 1
+    }
+  }
+  else if (p == paste("Gl",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["Gl"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "Gl"){
+    if (t["Gl"] >= 1){
+      result = 1
+    }
+  }
+  
+  # Alpha2,6-linked sialylation  
+  #E0-E4
+  else if (p == paste("E",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["E"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "E"){
+    if (t["E"] >= 1){
+      result = 1
+    }
+  }
+  else if (p == paste("Ge",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["Ge"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "Ge"){
+    if (t["Ge"] >= 1){
+      result = 1
+    }
+  }
+  
+  ### Fucosylation
+  #"F0"-"F7"
+  else if (p == paste("F",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["F"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "F"){
+    if (t["F"] >= 1){
+      result = 1
+    }
+  }
+  else if (p == "Fa"){
+    if (t["F"] >= 2){
+      result = 1
+    }
+  }
+  
+  ### Acetylation
+  #"Ac0"-"Ac4"
+  else if (p == paste("Ac",gsub(".*?([0-9]+)$", "\\1", p),sep="")){
+    if (t["Ac"] == as.numeric(gsub(".*?([0-9]+)$", "\\1", p))){
+      result = 1
+    }
+  }
+  else if (p == "Ac"){
+    if (t["Ac"] >= 1){
+      result = 1
+    }
+  }
+  
+  return(result)
+}
+
+getmatrix_trait_properties = function(matrix_traits){
+  # Returns matrix of properties true for traits
+  
+  props = c("T","PM","U","M","Hy","C",
+            "M4","M5","M6","M7","M8","M9","M10","M11","M12",
+            "A1","A2","A3","A4","ALN",
+            "B0","B",
+            "G0","G1","G2","G3","G4","G",
+            "S0","S1","S2","S3","S4","S",
+            "L0","L1","L2","L3","L4","L",
+            "E0","E1","E2","E3","E4","E",
+            "Gl0","Gl1","Gl2","Gl3","Gl4","Gl",
+            "Ge0","Ge1","Ge2","Ge3","Ge4","Ge",
+            "F0","F1","F2","F3","F4","F5","F6","F7","F","Fa",
+            "Ac0","Ac1","Ac2","Ac3","Ac4","Ac",
+            "eGlcA")
+  
+  traits = rownames(matrix_traits)
+  matrix_output = matrix(0,length(traits),length(props))
+  colnames(matrix_output) = props
+  rownames(matrix_output) = traits
+  
+  for (trait in traits){
+    for (prop in props){
+      matrix_output[trait,prop] = trait_has_prop(matrix_traits,trait,prop)
+    }
+  }
+  return(matrix_output)
+}
+
+getmatrix_group_calculations = function(matrix_props){
+  # Generate group calculation matrix on basis of properties matrix
+  
+  m = matrix_props
+  names = rownames(matrix_props)
+  
+  matrix_output = matrix("",0,1)
+  
+  ### Base
+  # T
+  sumlist = c()
+  for (name in names){
+    if (m[name,"T"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["T"] = paste(sumlist,collapse=" ")
+  
+  # TP
+  sumlist = c()
+  for (name in names){
+    if (m[name,"PM"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["TP"] = paste(sumlist,collapse=" ")
+  
+  # TU
+  sumlist = c()
+  for (name in names){
+    if (m[name,"U"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["TU"] = paste(sumlist,collapse=" ")
+  
+  # TM
+  sumlist = c()
+  for (name in names){
+    if (m[name,"M"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["TM"] = paste(sumlist,collapse=" ")
+  
+  # THy
+  sumlist = c()
+  for (name in names){
+    if (m[name,"Hy"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["THy"] = paste(sumlist,collapse=" ")
+  
+  # TC
+  sumlist = c()
+  for (name in names){
+    if (m[name,"C"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["TC"] = paste(sumlist,collapse=" ")
+  
+  # A1-A4
+  for (count in seq(1,4)){
+    sumlist = c()
+    for (name in names){
+      if (m[name,paste("A",count,sep="")] == 1){
+        sumlist = c(sumlist, name)
+      }    
+    }
+    matrix_output[paste("A",count,sep="")] = paste(sumlist,collapse=" ")
+  }
+  
+  # ALN (LacNac)
+  sumlist = c()
+  for (name in names){
+    if (m[name,"ALN"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["ALN"] = paste(sumlist,collapse=" ")
+  
+  # F0-F7
+  for (count in seq(0,7)){
+    sumlist = c()
+    for (name in names){
+      if (m[name,paste("F",count,sep="")] == 1){
+        sumlist = c(sumlist, name)
+      }    
+    }
+    matrix_output[paste("F",count,sep="")] = paste(sumlist,collapse=" ")
+  }
+  
+  # S0-S4
+  for (count in seq(0,4)){
+    sumlist = c()
+    for (name in names){
+      if (m[name,paste("S",count,sep="")] == 1){
+        sumlist = c(sumlist, name)
+      }    
+    }
+    matrix_output[paste("S",count,sep="")] = paste(sumlist,collapse=" ")
+  }
+  
+  ### High mannose compositions
+  for (count in seq(4,12)){
+    sumlist = c()
+    for (name in names){
+      if (m[name,paste("M",count,sep="")] == 1){
+        sumlist = c(sumlist,name)
+      }
+    }
+    matrix_output[paste("TM",count,sep="")] = paste(sumlist,collapse=" ")
+  }
+  
+  # More overall traits
+  traits = c("G","S","L","E","Gl","Ge","F","Ac")
+  nums = c("0","1","2","3","4","")
+  
+  for (trait in traits){
+    for (num in nums){
+      trait_name = paste(trait,num,sep="")
+      output_name = paste("T",trait_name,sep="")
+      sumlist = c()
+      for (name in names){
+        if (m[name,trait_name] == 1 && m[name,"C"] == 1){
+          sumlist = c(sumlist,name)
+        }
+      }
+      matrix_output[output_name] = paste(sumlist,collapse=" ")      
+    }
+  } 
+  
+  # TFa
+  sumlist = c()
+  for (name in names){
+    if (m[name,"Fa"] == 1 && m[name,"C"] == 1){
+      sumlist = c(sumlist, name)
+    }    
+  }
+  matrix_output["TFa"] = paste(sumlist,collapse=" ")
+  
+  ### Bisection
+  bisection_list = c("B0","B")
+  antennary_list = c("","A2")
+  fucosylation_list = c("","F0","F")
+  galactosylation_list = c("","G0","G1","G2","G")
+  sialylation_list = c("","S0","S1","S2","S")
+  for (bisection in bisection_list){
+    for (antenna in antennary_list){
+      for (fucose in fucosylation_list){
+        for (galactose in galactosylation_list){
+          for (sialylation in sialylation_list){
+            trait_name = paste(antenna,fucose,galactose,sialylation,bisection,sep="")
+            output_name = paste("T",trait_name,sep="")
+            sumlist = c()
+            for (name in names){
+              if (m[name,"C"] == 1 && m[name,bisection] == 1 && (antenna == "" || m[name,antenna] == 1) &&
+                    (fucose == "" || m[name,fucose] == 1) && (galactose == "" || m[name,galactose] == 1) &&
+                    (sialylation == "" || m[name,sialylation] == 1)){
+                sumlist = c(sumlist,name)
+              }        
+            }
+            matrix_output[output_name] = paste(sumlist,collapse=" ")
+          }
+        }
+      }
+    }
+  }
+  
+  ### The works: all combinations of antennary, fucosylation, galactosylation and sialylation
+  antennary_list = c("A1","A2","A3","A4","ALN")
+  fucosylation_list = c("","F0","F","Fa")
+  galactosylation_list = c("","G0","G1","G2","G3","G4","G")
+  sialylation_list = c("","S0","S1","S2","S3","S4","S",
+                       "L0","L1","L2","L3","L4","L",
+                       "E0","E1","E2","E3","E4","E",
+                       "Gl0","Gl1","Gl2","Gl3","Gl4","Gl",
+                       "Ge0","Ge1","Ge2","Ge3","Ge4","Ge")
+  for (antenna in antennary_list){
+    for (fucose in fucosylation_list){
+      for (galactose in galactosylation_list){
+        for (sialylation in sialylation_list){
+          trait_name = paste(antenna,fucose,galactose,sialylation,sep="")
+          output_name = paste("T",trait_name,sep="")
+          sumlist = c()
+          for (name in names){
+            if (m[name,"C"] == 1 &&
+                  m[name,antenna] == 1 &&
+                  (fucose == "" || m[name,fucose] == 1) &&
+                  (galactose == "" || m[name,galactose] == 1) &&
+                  (sialylation == "" || m[name,sialylation] == 1)){
+              sumlist = c(sumlist,name)
+            }
+          }
+          matrix_output[output_name] = paste(sumlist,collapse=" ")
+        }
+      }
+    }
+  }
+  
+  return(matrix_output)
+}
+
+get_sumstring = function(string){
+  # Create parenthesized sumstring from space delimited string.
+  # Returns "(0)" on empty string.
+  if (string == ""){
+    newstring = "(0)"
+  }
+  else {
+    newstring = "("
+    for (substring in unlist(strsplit(string,split=" "))){
+      substring = paste(substring,"+")
+      newstring = paste(newstring,substring)
+    }
+    newstring = substr(newstring,1,nchar(newstring)-2)
+    newstring = paste(newstring,")")
+  }
+  
+  return(newstring)
+}
+
+get_mathstring = function(name, string, matrix_groups){
+  # Generate interpretable math string from easy manual string.
+  
+  newstring = paste(name,"=")
+  
+  substring_list = unlist(strsplit(string,split=" "))
+  for (i in seq(length(substring_list))){
+    if (substring_list[i] %in% names(matrix_groups)){
+      subsubstring = matrix_groups[substring_list[i]]
+      substring_list[i] = get_sumstring(subsubstring)
+    }
+  }
+  
+  substring = paste(substring_list,collapse=" ")
+  newstring = paste(newstring,substring)
+  
+  return(newstring)
+}
+
+getmatrix_derived_calculations = function(requested_calculations, matrix_groups){
+  # Make array with derived trait calculations based on group matrix
+  # Whitespace is used for splitting later! Put one around all expressions!
+  
+  for (name in names(requested_calculations)){
+    requested_calculations[name] = get_mathstring(name,requested_calculations[name],matrix_groups)
+  }
+  
+  return(requested_calculations)
+}
+
+get_calcstring = function(string,data,glycan_names){
+  # Format calculation string into something parsable by eval().
+  
+  newstring = ""
+  data_name = deparse(substitute(data))
+  substring_list = unlist(strsplit(string,split=" "))
+  
+  
+  newstring = paste(data_name,".derived[,'",substring_list[1],"']",sep="")
+  
+  for (substring in substring_list[2:length(substring_list)]){
+    if (substring %in% glycan_names){
+      substring = paste(data_name,"[,'",substring,"']",sep="")
+    }
+    newstring = paste(newstring,substring)
+  }
+  
+  return(newstring)  
+}
+```
+
+## Read data
+
+```{r data import, include=TRUE}
+if(str_sub(import_file_name, start= -4) == ".txt"){
+  data = read.table(fname_data,sep="\t",header=1,na.string=c(NA,"NA",""),fill=TRUE)
+}
+if(str_sub(import_file_name, start= -5) == ".xlsx"){
+  if(!is.null(sheetName)){
+    data <- openxlsx::read.xlsx(fname_data, sheet=sheetName, colNames= TRUE, sep=" ")
+  } else {
+    data <- openxlsx::read.xlsx(fname_data, colNames= TRUE, sep=" ")
+  }
+}
+
+start_col <- which(str_detect(colnames(data), "^[Hh]([0-9]+)[Nn]([0-9]+).*$") == TRUE)[1] # column number where the glycans start, starts with HxNy
+```
+
+## Calculations
+
+```{r calculations execution, include=TRUE}
+# Select glycan species to use for derived traits
+glycan_names = names(data)[start_col:ncol(data)]
+
+# Run derived trait background functions
+matrix_glycans = getmatrix_blocks_per_trait(glycan_names)
+matrix_properties = getmatrix_trait_properties(matrix_glycans)
+matrix_groups = getmatrix_group_calculations(matrix_properties)
+matrix_derivedmath = as.matrix(getmatrix_derived_calculations(requested_calculations, matrix_groups))
+colnames(matrix_derivedmath) <- c("Calculation")
+matrix_groups = as.matrix(matrix_groups)
+colnames(matrix_groups) <- c("Composition")
+
+data.derived <- data[1:start_col-1]
+
+i=0
+# Perform derived trait calculation
+for (math in matrix_derivedmath){
+  i=i+1
+  calc_string = get_calcstring(math,data,glycan_names)
+  tryCatch({
+    eval(parse(text=calc_string))
+  }, error = function(e) {
+    calc_string = paste0("data.derived[,'", row.names(matrix_derivedmath)[i], "'] = (0) / data.derived[,'T']")
+    eval(parse(text=calc_string))
+  })
+}
+i=0
+
+data.derived[is.na(data.derived)] = NA # this line prevents NA values to be presented as #NUM!
+data.derived["T"] = signif(data.derived["T"], digits = 7) # because of rounding T might end up as 0.99999999 instead of 1. This line prevents that by rounding to 7 digits.
+data.derived.filter <- data.frame(Sums = colSums(data.derived[,(start_col+1):ncol(data.derived)])!=0 & colSums(data.derived[,(start_col+1):ncol(data.derived)])!=nrow(data.derived) & !is.na(colSums(data.derived[,(start_col+1):ncol(data.derived)])))
+data.derived.filter <- rownames(data.derived.filter %>% filter(Sums == TRUE))
+data.derived.curated <- cbind(data.derived[, 1:start_col],data.derived[,data.derived.filter])
+allData.curated <- cbind(data,data.derived.curated[,data.derived.filter])
+```
+
+## Write to file
+
+```{r write to file, include=TRUE}
+# Write new data to file
+if(str_detect(export_file_name, pattern = fixed(".txt"))){
+  # Write auxilary data to files
+  write.table(matrix_properties,"composition_properties.txt",sep="\t")
+  write.table(matrix_groups,"composition_groups.txt",sep="\t")
+  write.table(matrix_derivedmath,"derived_math.txt",sep="\t")
+  write.table(data.derived, fname_export,sep="\t",row.names=FALSE)
+  write.table(data.derived.curated, paste(fname_export, "_curated", sep=""),sep="\t",row.names=FALSE)
+}
+
+if(str_detect(export_file_name, pattern = fixed(".xlsx"))){
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "original")
+  openxlsx::addWorksheet(wb, "derived_traits")
+  openxlsx::addWorksheet(wb, "derived_traits_curated")
+  openxlsx::addWorksheet(wb, "all_traits_curated")
+  openxlsx::addWorksheet(wb, "composition_properties")
+  openxlsx::addWorksheet(wb, "composition_groups")
+  openxlsx::addWorksheet(wb, "derived_math")
+  openxlsx::writeData(wb, "original", data, rowNames = FALSE, keepNA = TRUE)
+  openxlsx::writeData(wb, "derived_traits", data.derived, rowNames = FALSE, keepNA = TRUE)
+  openxlsx::writeData(wb, "derived_traits_curated", data.derived.curated, rowNames = FALSE, keepNA = TRUE)
+  openxlsx::writeData(wb, "all_traits_curated", allData.curated, rowNames = FALSE, keepNA = TRUE)
+  openxlsx::writeData(wb, "composition_properties", matrix_properties, rowNames = TRUE)
+  openxlsx::writeData(wb, "composition_groups", matrix_groups, rowNames = TRUE)
+  openxlsx::writeData(wb, "derived_math", matrix_derivedmath, rowNames = TRUE)
+  openxlsx::saveWorkbook(wb, file = fname_export, overwrite = TRUE)
+}
+```
+Data written to `r fname_export`
