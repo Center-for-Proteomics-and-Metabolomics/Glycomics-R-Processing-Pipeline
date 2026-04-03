@@ -1,0 +1,544 @@
+---
+title: "Glycan Raw data Quality Control"
+authors: "Viktoria Dotz, Bas Jansen (v1.0), Elham Memarian (v1.1), Marco Bladergroen (v2.0 and higher)"
+date: "version: 4.0.1, 2025-03-06, executed `r  Sys.Date()`"
+version: 4.0.1
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options: 
+ chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding,
+ output_file = file.path(dirname(inputFile), paste0('Glycan Data Curation ', format(Sys.time(), '%Y-%m-%d %H_%M_%S'),'.html'))) })
+---
+# Version history
+1.0  : 2019-03-18: Viktoria Dotz, Bas Jansen\
+1.1  : 2021-04-13: Elham Memarian\
+2.0  : 2021-05-12: Marco Bladergroen: updated from .txt file usage to .xlsx file usage. Introduction of settings block and metaData file.\
+2.1  : 2022-05-19: Marco Bladergroen: dots removed from column headers.\
+2.2  : 2022-08-05: Marco Bladergroen: error in reference to table for sigmaTotal and sigmaFA corrected.\
+2.2.1: 2022-08-16: Marco Bladergroen: Minor layout changes.\
+2.2.2: 2022-12-14: Marco Bladergroen: Included option to leave out specific glycans (e.g. DP7 or specific other glycans used for quality control)\
+2.3.0: 2023-02-17: Marco Bladergroen: Eliminated the need for SampleTypes. Only SampleType for blanks is kept, which can be either numbered or named; selection and filtering simplified.\
+2.4.0: 2023-05-04: Marco Bladergroen: Mass list added to output.\
+3.0.0: 2022-10-13: Marco Bladergroen: Analyte curation based on rSD (30%) included.\
+3.1.0: 2023-12-19: Marco Bladergroen: Versions 2.x.y and 3.0.0 combined. Error in column shift corrected.\
+3.1.1: 2024-01-25: Marco Bladergroen: Small error with 'exclude' corrected.\
+3.1.2: 2024-03-15: Marco Bladergroen: Excluded traits (for instance internal standards) included in analyte verdict for quality checks, but excluded later.\
+3.1.3: 2024-04-04: Marco Bladergroen: Some typo's corrected after change in Data conversion script (version 11).\
+3.1.4: 2025-03-03: Marco Bladergroen: Option to include all samples, without first filtering on sd or IQR (set both to NULL).\
+4.0.0: 2025-03-06: Marco Bladergroen: Glycan renormalization now based on passed analytes per cohort.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(openxlsx)
+library(ggplot2)
+library(knitr)
+library(tibble)
+```
+
+```{r settings}
+wd <- getwd()
+dataFileName <- "<Name of datafile after 'Check blanks' script>.xlsx"
+sheetNameData <- "summary_wo_blanks"
+data_conCol <- "xy_filename" # Type here the name of the column in the datafile connecting the data with the metadata. Also define when no metafile is used = unique identifier for sample
+dataFileName <- paste(wd, dataFileName, sep="/")
+
+metaFileName <- "<Name of your metaData file>.xlsx"
+sheetNameMeta <- "metaData"
+meta_conCol <- "xy_filename" # Type here the name of the column in the metafile connecting the data with the metadata
+if(metaFileName!=""){
+  metaFileName <- paste(wd, metaFileName, sep="/")
+}
+
+outputFileName <- paste(wd, paste0("<Name of the output file>", format(Sys.time(), '%Y-%m-%d %H_%M_%S'), ".xlsx"), sep="/")
+
+# Sample type for blanks (used for filtering)
+typeNumBlank <- c(0, "blank", "Blank", "PBS")
+typeNumTech <- c(10, "Visucon", "visucon") #Set all possible notations for technical samples (e.g. Visucon) to be included for data checks, but excluded from analysis
+
+colNameCohort <- "Subgroup" # If NULL, all samples will be analyzed as a single cohort (Visucon excluded), otherwise per cohort group.
+colNameSampleType <- "SampleType"
+
+# include or exclude specific samples: put names used in data_conCol or meta_conCol here. Use a data frame: first column (vector) are excluded samples, second column (vector) are exclusion reasons; exclude <- data.frame(c(excluded), c(reasons_excluded)). NULL if not needed
+include <- NULL #data.frame(c(), c())
+exclude <- NULL #data.frame(c(), c())
+
+# list naming
+if(!is.null(include)){
+  names(include) <- c(data_conCol, "Inclusion reason")
+}
+
+if(!is.null(exclude)){
+  names(exclude) <- c(data_conCol, "Exclusion reason")
+}
+
+# Exclude specific columns (normally used for quality control like DP7 (H7))
+excludeTrait <- c("H7")
+
+## Spectra curation cut-offs
+sd_cutoff <- 3 #NULL if IQR should be used
+IQR_factor <- NULL # select (1.5 or) 3: NULL if mean and xSD should be used
+
+## Analyte curation cutoffs
+SN <- 9
+IPQ <- 0.2
+PPM <- 10
+RSD <- NULL #30 # Set to NULL if analyte curation based on rSD not needed. Default=30.
+k_Cutoff_per_group <- 0.25 # Fraction of samples that should contain a certain analyte
+k_Cutoff_anal_num <- 0.25 # Fraction of number of curated analytes a sample should contain (per biological group) in order to be included
+k_Cutoff_TotInt_cur <- 0.01 # Fraction of curated Total Intensity a sample should have (per biological group) in order to be included.
+
+default_color <- "green"
+colorSetLUMC <- c("#007cc2", "#c0965c", "#e3004f", "#003c7d", "#009fbd", "#6e90ab", "#80a51b","#f39200", "#cf7a92", "#8d716f", "#7f5ca3", "#ffcc00")
+colorSetGerda <- c("#36465f", "#00857c", "#97c8ab", "#bf5349", "#e15a54", "#e97264", "#be9851", "#e5aa2a") # Tumblr (blue), Etos (green), The Correspondent (lightgreen), Wehkamp (red), The Correspondent (mediumred), Google (lightred), Tenslife (brownyellow), Douwe Egberts (yellow), NA (grey)
+colorNA <- "#D3D3D3"
+figCols <- colorSetLUMC #c("red", "blue", "purple", "green" )
+```
+
+### Dataset Loading
+```{r Dataset loading}
+if(sheetNameData != ""){
+  data <- read.xlsx(dataFileName, sheet = sheetNameData, colNames= TRUE, sep=" ")
+} else {
+  data <- read.xlsx(dataFileName, colNames= TRUE, sep=" ")
+}
+
+##Variable subsets
+if(metaFileName != ""){
+  if(sheetNameMeta != ""){
+    metaData <- read.xlsx(metaFileName, sheet = sheetNameMeta, colNames= TRUE, sep=" ")
+  } else {
+    metaData <- read.xlsx(metaFileName, colNames= TRUE, sep=" ")
+  }
+  metaData <- metaData %>% mutate(across(where(is.numeric), as.factor))
+} else {
+  # assume metaData is in data
+  metaData <- data[1:(which(colnames(data)=="Total Intensity")-1)]
+}
+
+if(ncol(metaData)>1 & length(which(colnames(data) %in% colnames(metaData)))>1){
+  allData <- metaData %>% 
+        inner_join(y = data[-(which(colnames(data) %in% colnames(metaData))[!colnames(metaData) %in% c(data_conCol)])], by = c(eval(parse(text = paste0("\"", meta_conCol, "\" = \"", data_conCol, "\"")))))
+} else if(ncol(metaData)>1){
+  allData <- metaData %>% 
+        inner_join(y = data, by = c(eval(parse(text = paste0("\"", meta_conCol, "\" = \"", data_conCol, "\"")))))
+} else {
+  allData <- data
+}
+
+names(figCols) <- levels(allData[[colNameSampleType]])
+```
+
+### Spectrum Quality Plots before curation
+```{r Initial Spectrum Quality Plots}
+# Total Intensity vs.Fraction of analyte >9 S/N
+QCplot <- ggplot(allData, aes(x=allData[,"Total Intensity"], y=allData[,"Fraction of Analyte above S/N cut-off (9)"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(allData[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of analytes with S/N > 9")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+# Total Intensity vs.Fraction of analyte area minus background >9 S/N
+QCplot <- ggplot(allData, aes(x=allData[,"Total Intensity"], y=allData[,"Fraction of Analyte Area - Background Area above S/N cut-off (9)"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(allData[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of analyte area minus background with S/N > 9")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+# Total Intensity vs.Fraction of spectrum in analytes
+QCplot <- ggplot(allData, aes(x=allData[,"Total Intensity"], y=allData[,"Fraction of spectrum in analytes"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(allData[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of spectrum in analytes")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+# Spectrum-QC based outlier removal (lower end only; after blank removal)
+```{r Spectrum QC after blank removal}
+inputData <- allData
+data_Blnk <- allData %>% filter(!!sym(colNameSampleType) %in% typeNumBlank) # should already been eliminated by R_Readable_data_analysis script. If not empty, blanks are not blank
+if(nrow(data_Blnk)>0){
+  print("Blanks with signal")
+  kable(as.data.frame(data_Blnk))
+}
+allData <- allData %>% filter(!(!!sym(colNameSampleType) %in% typeNumBlank)) # for blank removal
+
+if(!is.null(sd_cutoff)){
+  ## A) Mean and xSD for outlier removal
+  # Select QC parameter(s) of interest
+  muTotal <- mean(allData$`Total Intensity`,na.rm=TRUE)
+  sigmaTotal <- sd(allData$`Total Intensity`,na.rm=TRUE)
+  
+  muFA <- mean(allData$`Fraction of Analyte above S/N cut-off (9)`,na.rm=TRUE)
+  sigmaFA <- sd(allData$`Fraction of Analyte above S/N cut-off (9)`,na.rm=TRUE)
+
+  muFABG <- mean(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`,na.rm=TRUE)
+  sigmaFABG <- sd(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`,na.rm=TRUE)
+
+  lowerTotal <- muTotal - sd_cutoff * sigmaTotal
+  lowerTotal
+  #upperTotal <- muTotal + sd_cutoff * sigmaTotal #maybe don't use?
+  
+  lowerFA <- muFA - sd_cutoff * sigmaFA
+  #upperFA <- muFA + sd_cutoff * sigmaFA #maybe don't use?
+  
+  lowerFABG <- muFABG - sd_cutoff * sigmaFABG
+  #upperFABG <- muFABG + sd_cutoff * sigmaFABG #maybe don't use?
+
+  #Total Intensity, Fraction of Analytes above S/N cut-off(9) and Fraction of Analytes - Background Area above S/N cut-off(9) all above 'lower' values
+  data_curated <- allData %>% filter(`Total Intensity`>lowerTotal & `Fraction of Analyte above S/N cut-off (9)`>lowerFA & `Fraction of Analyte Area - Background Area above S/N cut-off (9)`>lowerFABG)
+} else if(!is.null(IQR_factor)){
+  ## B) IQR rule for outlier removal
+  upperTotal <- quantile(allData$`Total Intensity`,0.75, na.rm=TRUE) + (IQR(allData$`Total Intensity`, na.rm=TRUE) * IQR_factor ) #maybe don't use?
+  lowerTotal <- quantile(allData$`Total Intensity`,0.25, na.rm=TRUE) - (IQR(allData$`Total Intensity`, na.rm=TRUE) * IQR_factor )
+  upperFA <- quantile(allData$`Fraction of Analyte above S/N cut-off (9)`,0.75, na.rm=TRUE) + (IQR(allData$`Fraction of Analyte above S/N cut-off (9)`, na.rm=TRUE) * IQR_factor ) #maybe don't use?
+  lowerFA <- quantile(allData$`Fraction of Analyte above S/N cut-off (9)`,0.25, na.rm=TRUE) - (IQR(allData$`Fraction of Analyte above S/N cut-off (9)`, na.rm=TRUE) * IQR_factor )
+  upperFABG <- quantile(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`,0.75, na.rm=TRUE) + (IQR(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`, na.rm=TRUE) * IQR_factor ) #maybe don't use?
+  lowerFABG <- quantile(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`,0.25, na.rm=TRUE) - (IQR(allData$`Fraction of Analyte Area - Background Area above S/N cut-off (9)`, na.rm=TRUE) * IQR_factor )
+ 
+  #Fraction of Analytes-based outlier removal
+  data_curated <- allData %>% filter(`Total Intensity`>lowerTotal && `Total Intensity`<upperTotal && `Fraction of Analyte above S/N cut-off (9)`>lowerFA && `Fraction of Analyte above S/N cut-off (9)`<upperFA && `Fraction of Analyte Area - Background Area above S/N cut-off (9)`>lowerFABG && `Fraction of Analyte Area - Background Area above S/N cut-off (9)`<upperFABG)
+} else {
+  data_curated <- allData
+}
+txt <- paste("row.names(data_curated) <- data_curated$", meta_conCol, sep="")
+eval(parse(text=txt))
+
+# % of spectra kept
+print(paste(round(nrow(data_curated)*100/nrow(allData), 1), "% (", nrow(data_curated), ") of spectra kept, ", nrow(allData)-nrow(data_curated), " removed", sep=""))
+
+# #select only spectra that were kept / removed
+txt <- paste("!", meta_conCol, " %in% data_curated$", meta_conCol, sep="")
+data_removed <- allData %>% filter(eval(parse(text=txt)))
+txt <- paste("row.names(data_removed) <- data_removed$", meta_conCol, sep="")
+eval(parse(text=txt))
+
+options(knitr.kable.NA = '')
+kable(as.data.frame(head(data_curated) %>% add_row()), caption = "Curated data.")
+kable(as.data.frame(data_removed), caption = "Removed data.")
+
+if(!is.null(include)){
+  data_curated <- rbind(data_curated, data_removed %>% filter(eval(parse(text=meta_conCol)) %in% include[[data_conCol]]))
+  data_removed <- data_removed %>% filter(!eval(parse(text=meta_conCol)) %in% include[[data_conCol]])
+}
+if(!is.null(exclude)){
+  data_removed_manual <- data_curated %>% filter(eval(parse(text=meta_conCol)) %in% exclude[[data_conCol]])
+  data_curated <- data_curated %>% filter(!eval(parse(text=meta_conCol)) %in% exclude[[data_conCol]])
+}
+
+data_curated <- data_curated %>% droplevels()
+data_removed <- data_removed %>% droplevels()
+
+if(!is.null(exclude)){
+  data_removed_manual <- data_removed_manual %>% droplevels()
+  data_removed_manual <- right_join(exclude, data_removed_manual, data_conCol)
+}
+
+wb <- createWorkbook()
+addWorksheet(wb, "input_data")
+writeData(wb, "input_data", inputData, rowNames = FALSE, keepNA = TRUE)
+if(nrow(data_Blnk)>0){
+  addWorksheet(wb, "removed_blanks")
+  writeData(wb, "removed_blanks", data_Blnk, rowNames = FALSE, keepNA = TRUE)
+}
+addWorksheet(wb, "curated_spectra_1")
+addWorksheet(wb, "removed_spectra_1")
+writeData(wb, "curated_spectra_1", data_curated, rowNames = FALSE, keepNA = TRUE)
+writeData(wb, "removed_spectra_1", data_removed, rowNames = FALSE, keepNA = TRUE)
+if(!is.null(exclude)){
+  addWorksheet(wb, "removed_spectra_manual")
+  writeData(wb, "removed_spectra_manual", data_removed_manual, rowNames = FALSE, keepNA = TRUE)
+}
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+```
+
+### Curated Spectra quality plots incl. boxplot for Fraction of analyte >9 S/N distribution
+```{r Curated Spectra quality plots}
+# Total Intensity vs.Fraction of analyte >9 S/N
+QCplot <- ggplot(data_curated, aes(x=data_curated[,"Total Intensity"], y=data_curated[,"Fraction of Analyte above S/N cut-off (9)"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(data_curated[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of analytes with S/N > 9")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+# Total Intensity vs.Fraction of analyte area minus background >9 S/N
+QCplot <- ggplot(data_curated, aes(x=data_curated[,"Total Intensity"], y=data_curated[,"Fraction of Analyte Area - Background Area above S/N cut-off (9)"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(data_curated[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of analyte area minus background with S/N > 9")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+# Total Intensity vs.Fraction of spectrum in analytes
+QCplot <- ggplot(data_curated, aes(x=data_curated[,"Total Intensity"], y=data_curated[,"Fraction of spectrum in analytes"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(data_curated[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Fraction of spectrum in analytes")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+#Boxplot
+boxplot(data_curated[,"Fraction of Analyte above S/N cut-off (9)"], xlab="spectra kept", ylab="Fraction of Analyte > S/N 9",main="Curated Spectra quality plots")
+```
+
+### Analyte quality control
+```{r Analyte quality control}
+SN_cols <- which(str_detect(colnames(data_curated), "^S/N_") == TRUE) #indicate column numbers where S/N value is stored
+IPQ_cols <- which(str_detect(colnames(data_curated), "^IPQ_") == TRUE) #indicate column numbers where IPQ value is stored
+AbsPPM_cols <- which(str_detect(colnames(data_curated), "^AbsPPM_") == TRUE) #indicate column numbers where AbsPPM value is stored
+analytes_num <- length(which(str_detect(colnames(data_curated), "^S/N_") == TRUE)) #indicate the number of analytes extracted by MassyTools
+
+SN_columns <- colnames(data_curated[SN_cols])
+IPQ_columns <- colnames(data_curated[IPQ_cols])
+AbsPPM_columns <- colnames(data_curated[AbsPPM_cols])   # write col. number of Abs. ppm
+
+pass_matrix <- c()
+for (i in 1:nrow(data_curated)){
+	# CREATE LIST THAT CONTAINS PASS_FAIL
+	pass_list <- c()
+	# THIS FOR LOOPS 'CHEATS' TO ITERATE OVER ALL ANALYTES
+	for (j in 1:analytes_num) {
+		pass = TRUE
+	
+		# IF ANALYTE FAIL SN, SET PASS TO FALSE
+		if (is.na(data_curated[i,SN_columns[j]]) || data_curated[i,SN_columns[j]] < SN) {
+			pass = FALSE
+		}
+
+		# IF ANALYTE FAILS IPQ, SET PASS TO FALSE
+		if (is.na(data_curated[i,IPQ_columns[j]]) || data_curated[i,IPQ_columns[j]] > IPQ) {
+			pass = FALSE
+		}
+
+		# IF ANALYTE FAILS PPM, SET PASS TO FALSE
+		if (is.na(data_curated[i,AbsPPM_columns[j]]) || data_curated[i, AbsPPM_columns[j]] > PPM) {
+			pass = FALSE
+		}
+
+		# IF PASS IS FALSE APPEND 0 TO PASS_LIST, ELSE 1
+		if (pass == FALSE) {
+			pass_list  <- c(pass_list, 0)
+		 } else {
+			pass_list  <- c(pass_list, 1)
+		}
+	}
+	# JOIN PASS LISTS INTO PASS_MATRIX
+	pass_matrix <- rbind(pass_matrix, pass_list)
+	rownames(pass_matrix)[i] <- eval(parse(text=paste("data_curated$", meta_conCol, "[", i, "]", sep="")))
+}
+# ASSIGN COLUMN NAMES AND MERGE BOTH MATRICES
+names_list <- c()
+mass_list <- data.frame()
+for (analyte in SN_columns) {
+	parts = strsplit(analyte, "_")
+	name = tail(parts[[1]], 1)
+	mass_list = rbind(mass_list, c(name, parts[[1]][2]))
+	name = paste("QC_",name,sep="")
+	names_list = c(names_list, name)
+}
+colnames(pass_matrix) <- names_list
+colnames(mass_list) <- c("Trait", "mass")
+mass_list <- mass_list %>% mutate_at(c("mass"), as.numeric)
+data_verdict <- cbind(data_curated, pass_matrix)
+if(!is.null(colNameCohort)){
+  pass_matrix <- cbind(data_verdict[[colNameCohort]], pass_matrix)
+  colnames(pass_matrix)[1] <- "Cohort"
+}
+addWorksheet(wb, "analyte verdict")
+writeData(wb, "analyte verdict", pass_matrix, rowNames = TRUE, keepNA = TRUE)
+addWorksheet(wb, "masses")
+writeData(wb, "masses", mass_list, rowNames = FALSE, keepNA = TRUE)
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+```
+
+```{r Check quality controls}
+# To be included in future
+```
+
+```{r Select analytes which passed criteria}
+# select columns with 0/1 anaQC verdict
+data_anaQC <- data_verdict %>% select(!!! rlang::syms(colNameSampleType), !!! rlang::syms(colNameCohort), colnames(data_verdict %>% select(matches("^QC_"))))
+
+# Calculate (per biological group) %-age of spectra in which the analyte passed QC
+table_percent <- data_anaQC %>%
+                    group_by(!!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType)) %>%
+                    summarise_all((list(percent = mean)))
+
+writeData(wb, "analyte verdict", table_percent, startRow = nrow(data_verdict)+2, rowNames = FALSE, keepNA = TRUE)
+## Generate pass list for all analytes per biological group
+pass_matrix <- c()
+
+for (i in 1:nrow(table_percent)){
+  pass_list = c()
+  for (j in colnames(table_percent[,-which(names(table_percent) %in% c(colNameCohort,colNameSampleType))])) {
+		pass = TRUE
+		if (table_percent[i,j] < k_Cutoff_per_group) {
+			pass = FALSE
+		}
+		if (pass == FALSE) {
+			pass_list  = c(pass_list, 0)
+		} else {
+			pass_list  = c(pass_list, 1)
+		}
+	}
+	# JOIN PASS LISTS INTO PASS_MATRIX
+	pass_matrix = rbind(pass_matrix, pass_list)
+}
+pass_matrix = data.frame(cbind(table_percent[,which(names(table_percent) %in% c(colNameCohort,colNameSampleType))], pass_matrix))
+
+# MERGE BOTH MATRICES
+colnames(pass_matrix) <- colnames(table_percent)
+if(!is.null(colNameCohort)){
+  rownames(pass_matrix) <- paste("pass_list_samplegroup_", pass_matrix[[which(names(table_percent) %in% c(colNameCohort))]], pass_matrix[[which(names(table_percent) %in% c(colNameSampleType))]], sep="")
+} else {
+  rownames(pass_matrix) <- paste("pass_list_samplegroup_", pass_matrix[[which(names(table_percent) %in% c(colNameSampleType))]], sep="")
+}
+
+colnames(pass_matrix) <- gsub("percent", "include", colnames(pass_matrix))
+colnames(pass_matrix) <- gsub("QC_", "", colnames(pass_matrix))
+writeData(wb, "analyte verdict", pass_matrix, startRow = nrow(data_verdict)+nrow(table_percent)+3, rowNames = FALSE, keepNA = TRUE)
+if(!is.null(colNameCohort)){
+  pass_matrix_sum <- pass_matrix %>% group_by(!!sym(colNameCohort)) %>% summarize(across(-c(1), max))
+  pass_matrix_sum <- pass_matrix %>% 
+                        select(!!sym(colNameCohort), !!sym(colNameSampleType)) %>% 
+                        left_join(y=pass_matrix_sum, by=colNameCohort)
+} else {
+  pass_matrix_sum <- pass_matrix %>% filter(!(!!! rlang::syms(colNameSampleType) %in% c(typeNumTech, typeNumBlank))) %>% summarize(across(-c(1), max))
+  pass_matrix_sum <- rbind(pass_matrix_sum, pass_matrix_sum[rep(1,nrow(pass_matrix %>% filter(!(!!! rlang::syms(colNameSampleType) %in% c(typeNumTech, typeNumBlank))))-1), ])
+  pass_matrix_sum <- cbind(pass_matrix %>% filter(!(!!! rlang::syms(colNameSampleType) %in% c(typeNumTech, typeNumBlank))) %>% select(!!! rlang::syms(colNameSampleType)), pass_matrix_sum)
+  pass_matrix_sum <- rbind(pass_matrix_sum, pass_matrix %>% filter(!!! rlang::syms(colNameSampleType) %in% c(typeNumTech, typeNumBlank)))
+}
+writeData(wb, "analyte verdict", pass_matrix_sum, startRow = nrow(data_verdict)+nrow(table_percent)+nrow(pass_matrix)+4, rowNames = FALSE, keepNA = TRUE)
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+# Number of analytes passed
+rowSums(pass_matrix[,-which(names(table_percent) %in% c(colNameCohort,colNameSampleType))])-length(excludeTrait)
+```
+
+```{r Additional spectra quality control based on curated analytes}
+totInt_curated <- rowSums(data_verdict %>% select(colnames(data_verdict %>% select(matches("^AbsArea-BG_")) %>% select(!matches(paste0('_', excludeTrait, '$', collapse = '|'))))) * data_verdict %>% select(colnames(data_verdict %>% select(matches("^QC_")) %>% select(!matches(paste0('_', excludeTrait, '$', collapse = '|')))))) # Exclude glycans mentioned in excludeTrait
+
+data_verdict <- cbind(data_verdict, totInt_curated)
+
+v_rowsums <- rowSums(data_verdict %>% select(colnames(data_verdict %>% select(matches("^QC_")) %>% select(!matches(paste0('_', excludeTrait, '$', collapse = '|'))))))
+
+data_verdict <- cbind(data_verdict, v_rowsums)
+
+##Calculate (per cohort and per biological group) maximum of analytes which passed QC and maximum of total intensity
+data_pass <- data_verdict %>% 
+        inner_join(y = data_verdict %>% 
+              group_by(!!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType)) %>%
+              summarise(max = max(v_rowsums), maxInt = max(totInt_curated), .groups="keep"), by = c(colNameCohort, colNameSampleType))
+
+data_pass$pass <- ifelse(data_pass$v_rowsums < k_Cutoff_anal_num*data_pass$max | data_pass$totInt_curated < k_Cutoff_TotInt_cur*data_pass$maxInt, 0, 1)
+data_pass <- data_pass %>% droplevels()
+data_NOpass <- data_pass %>% filter(pass == 0) 
+data_pass <- data_pass %>% filter(pass == 1) #select only spectra which passed the criteria
+
+addWorksheet(wb, "curated_spectra_2")
+writeData(wb, "curated_spectra_2", data_pass, rowNames = FALSE, keepNA = TRUE)
+addWorksheet(wb, "removed_spectra_2")
+writeData(wb, "removed_spectra_2", data_NOpass, rowNames = FALSE, keepNA = TRUE)
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+```
+
+### Spectrum Quality Plots after second spectrum curation
+```{r Plots after 2nd spectrum curation}
+#Total Intensity of passed analytes vs.Number of passed analytes 
+QCplot <- ggplot(data_pass, aes(x=data_pass[,"totInt_curated"], y=data_pass[,"v_rowsums"], color=!!sym(colNameSampleType))) +
+            geom_point(shape=1) +
+            scale_colour_manual(limits = levels(unique(data_pass[[colNameSampleType]])), values=figCols) +
+            xlab("Total intensity") + ylab("Number of passed analytes")
+QCplot+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+#Boxplot
+boxplot(data_pass[,"v_rowsums"], xlab="spectra kept", ylab="Number of passed analytes")
+```
+
+### Renormalization and output to excel
+```{r Final selection}
+### Renormalize relative intensities on the selected analytes
+# ## ALTERNATIVE A: All groups together
+#Prepare selected sub-dataset
+data_pre_renorm <- data_pass %>% select(all_of(data_conCol), !!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType), colnames(data_pass %>% select(matches("^CorrArea-BG_")) %>% select(!matches(paste0('_', excludeTrait, '$', collapse = '|'))))) # indicate CorrArea-BG columns
+cnames <- sapply(strsplit(colnames(data_pre_renorm), split='_', fixed=TRUE), function(x) (x[3]))
+names(data_pre_renorm) <- cnames
+names(data_pre_renorm)[which(is.na(cnames))] <- c(data_conCol, colNameCohort, colNameSampleType)
+
+## Multiply data_pre_renorm with pass_matrix_sum: only glycans selected per group will be > 0.
+# if(!is.null(colNameCohort)){
+#   pass_matrix_sum <- data_pre_renorm %>% 
+#                     select(all_of(data_conCol), !!sym(colNameCohort), !!sym(colNameSampleType)) %>% 
+#                     left_join(y=pass_matrix_sum %>% select(!matches(paste0(excludeTrait, "_include"))) %>% select(-c(colNameSampleType)), by = c(colNameCohort))
+# } else {
+#   pass_matrix_sum <- data_pre_renorm %>% 
+#                     select(all_of(data_conCol), !!sym(colNameCohort), !!sym(colNameSampleType)) %>% 
+#                     left_join(y=pass_matrix_sum %>% select(!matches(paste0(excludeTrait, "_include"))), by = c(colNameSampleType))
+# }
+pass_matrix_sum <- data_pre_renorm %>% 
+                    select(all_of(data_conCol), !!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType)) %>% 
+                    left_join(y=pass_matrix_sum %>% select(!matches(paste0(excludeTrait, "_include"))), by = c(colNameCohort, colNameSampleType))
+
+data_pre_renorm_select <- (data_pre_renorm %>%
+                            select(-c(all_of(data_conCol), !!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType)))) * (pass_matrix_sum %>%
+                            select(-c(all_of(data_conCol), !!! rlang::syms(colNameCohort), !!! rlang::syms(colNameSampleType))))
+
+## ...and renormalize to row sum
+data_pre_renorm_select <- cbind(data_pre_renorm_select, oldSum = rowSums(data_pre_renorm_select))
+data_renorm <- data_pre_renorm_select %>% mutate(across(.cols = everything(), .fns = list("renorm" = ~./data_pre_renorm_select$oldSum))) %>% rename(newSum = oldSum_renorm)
+
+# Merge renormalized data with nonGlyco information
+renormalized = cbind(data_pre_renorm %>% select(all_of(data_conCol)), data_renorm %>% select(matches("_renorm$")))
+colnames(renormalized) <- c(data_conCol, sapply(strsplit(colnames(renormalized[,2:ncol(renormalized)]), split='_', fixed=TRUE), function(x) (x[1])))
+renormalized <- renormalized %>% select(colnames(renormalized[1]), colnames(renormalized[which(colSums(renormalized[2:ncol(renormalized)])!=0)+1]))
+mass_list <- mass_list %>% filter(Trait %in% colnames(renormalized[,-which(colnames(renormalized) %in% c(all_of(data_conCol), colNameCohort, colNameSampleType))])) %>% arrange(., mass)
+renormalized <- merge(metaData, renormalized)
+addWorksheet(wb, "curated_masses")
+writeData(wb, "curated_masses", mass_list, rowNames = FALSE, keepNA = TRUE)
+addWorksheet(wb, "renormalized")
+writeData(wb, "renormalized", renormalized, rowNames = FALSE, keepNA = TRUE)
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+```
+
+### Additional analyte curation based on rSD
+```{r Analyte curation based on rSD}
+if(!is.null(RSD)){
+  renormCV <- NULL
+  renormData <- cbind(data_pre_renorm[1:2], data_renorm %>% select(matches("_renorm$"))) %>% group_by(!!sym(colNameSampleType))
+  colnames(renormData) <- c(colnames(renormData)[1:2], sapply(strsplit(colnames(renormData[,3:ncol(renormData)]), split='_', fixed=TRUE), function(x) x[1]))
+  renormMean <- renormData %>%
+      summarise_at(vars(colnames(renormData[,-c(1,2)])), list(mean = mean))
+  renormSD <-renormData %>%
+      summarise_at(vars(colnames(renormData[,-c(1,2)])), list(sd = sd))
+  renormCV <- cbind(renormSD[1],renormSD[-1]/renormMean[-1])
+  colnames(renormCV) <- sapply(strsplit(colnames(renormCV), split='_', fixed=TRUE), function(x) x[1])
+  colnamesCV <- colnames(renormCV %>% select(where(~is.numeric(.x) && any(.x < RSD/100))))
+  selectCV <- renormData %>% select(xy_filename, !!sym(colNameSampleType), which(colnames(renormData) %in% colnamesCV))
+  addWorksheet(wb, "renormalized_RSD_any")
+  writeData(wb, "renormalized_RSD_any", selectCV, rowNames = FALSE, keepNA = TRUE)
+  colnamesCV <- colnames(renormCV %>% select(where(~is.numeric(.x) && all(.x < RSD/100))))
+  selectCV <- renormData %>% select(xy_filename, !!sym(colNameSampleType), which(colnames(renormData) %in% colnamesCV))
+  addWorksheet(wb, "renormalized_RSD_all")
+  writeData(wb, "renormalized_RSD_all", selectCV, rowNames = FALSE, keepNA = TRUE)
+  saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+} else {
+ print("Not executed")
+}
+```
+
+### Session Info
+```{r}
+sessionInfo()
+```
