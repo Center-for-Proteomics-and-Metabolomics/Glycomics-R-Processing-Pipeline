@@ -1,0 +1,772 @@
+---
+title: "Glycan Data Check After Curation"
+author: "Marco Bladergroen"
+date: "version 4.0.0, 01-04-2025, executed `r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding,
+  output_file = file.path(dirname(inputFile), paste0('Glycan Data Check After Curation ', format(Sys.time(), '%Y-%m-%d %H_%M_%S'), '.html'))) })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=14, echo = TRUE)
+```
+# Version history:
+
+Version 1.0 (Marco Bladergroen): date unknown
+<ul></ul>
+Version 3.1 (Marco Bladergroen): 2024-04-11
+<ul></ul>
+Version 3.1.1 (Marco Bladergroen): 2024-06-25
+<ul></ul>
+Version 4.0.0 (Marco Bladergroen): 2025-04-01
+<ul>Script adapted to new data curation output (v4.0.1): New data curation output can produce zero-values. Upon selection and filtering this can create columns with all 0 or all NA values. Script adapted so that these values (columns) are not included. Technical check now performed per technical group (pool per cohort / Visucon).</ul>
+
+# Libraries used
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(openxlsx)
+library(ggplot2)
+library(reshape2)
+library(lubridate)
+library(GMCM)
+library(plotly)
+library(data.table)
+```
+# Function Definitions
+```{r functions}
+lm_eqn <- function(m){
+  eq <- if(coef(m)[2]<0){
+          substitute(italic(y) == a - b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+                    list(a = format(unname(coef(m)[1]), digits = 3),
+                         b = format(unname(abs(coef(m)[2])), digits = 5),
+                         r2 = format(summary(m)$r.squared, digits = 2)))
+        } else {
+          substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2,
+                    list(a = format(unname(coef(m)[1]), digits = 3),
+                         b = format(unname(coef(m)[2]), digits = 5),
+                         r2 = format(summary(m)$r.squared, digits = 2)))
+        }
+  as.character(as.expression(eq));
+}
+```
+# Settings
+```{r settings}
+wd <- getwd()
+
+### data file direct traits
+traitFileName <- "<Name of your curated data file>.xlsx"
+sheetNameTraits <- "renormalized"
+traitConCol <- "xy_filename" # Type here the name of the column in the datafile connecting the data with the metadata. Also define when no metafile is used = unique identifier for sample
+if(traitFileName!=""){
+  traitFileName <- paste(wd, traitFileName, sep="/")
+}
+
+### data file derived traits
+derivedFileName <- "<Name of the glycosylation traits file>.xlsx"
+sheetNameDerived <- "derived_traits_curated"
+derivedConCol <- "xy_filename" # Type here the name of the column in the datafile connecting the data with the metadata. Also define when no metafile is used = unique identifier for sample
+if(derivedFileName!=""){
+  derivedFileName <- paste(wd, derivedFileName, sep="/")
+}
+
+### meta file
+metaFileName <- "<Name of your metaData file>.xlsx"
+sheetNameMeta <- "metaData"
+if(metaFileName!=""){
+  metaFileName <- paste(wd, metaFileName, sep="/")
+}
+metaConCol <- "xy_filename" # Type here the name of the column in the metafile connecting the data with the metadata
+nMetaCols <- NULL #11 number of metadata columns, set to NULL when to be determined by script
+
+### IgG file
+IgGFileName <- ""
+sheetNameIgG <- ""
+
+### technical file if different from data file
+technicalCheck <- TRUE
+technicalCheckFileName <- "" #2022-02-25_Derived_traits_MC_Batch_Corrected.xlsx
+sheetNameTechnicalCheck <- "renormalized"
+
+# Percentage cut-off from numeric to factorial or character to factorial
+facToNum <- 0.05
+facToChar <- 0.1
+
+# Sample type number or names: you need a column SampleType in your metaData 
+typeNumCase <- c(1,3,5)
+typeNumControl <- c(2,4,6)
+typeNumPool <- c(7,8,9)
+typeNumVisucon <- 10
+
+technicalColumnsToCheck <- c("SampleType", "PlateBarcode")
+topN <- 25 # set top N items to check (highest peaks)
+
+ageColumn <- "Age" #"Age"
+sexColumn <- "Sex" #"Sex"
+
+### include or exclude specific features
+# use the features (values) of metadata to include in filter
+# examples : 
+#   - all variables should be included : NULL
+#   - only male in agegroup 40-49 should be included : c("male", "agegroup") and list(c("1"), c("40-49"))(see also show_filter)
+show_filter_include <- NULL # Set here which group you want to filter (either include or exclude)
+include <- NULL #list(c("1"), c("1"))
+show_filter_exclude <- NULL #c("SampleType")
+exclude <- NULL #list(c(typeNumVisucon)) #list(c("BEAT6W"))
+```
+
+# Data import
+```{r Read_data}
+#Read traits if present
+if(traitFileName!=""){
+  if(sheetNameTraits != ""){
+    traitData <- read.xlsx(traitFileName, sheet = sheetNameTraits, colNames = TRUE, sep=" ")
+  } else {
+    traitData <- read.xlsx(traitFileName, colNames = TRUE, sep=" ")
+  }
+}
+
+#Read derived traits if present
+if(derivedFileName!=""){
+  if(sheetNameDerived != ""){
+    derivedData <- read.xlsx(derivedFileName, sheet = sheetNameDerived, colNames = TRUE, sep=" ")
+  } else {
+    derivedData <- read.xlsx(derivedFileName, colNames = TRUE, sep=" ")
+  }
+}
+
+# Read Metadata if present. If not, extract from traits or derived traits
+if(metaFileName!="") {
+  if(sheetNameMeta!=""){
+    metaData <- read.xlsx(metaFileName, sheet=sheetNameMeta, colNames = TRUE, sep=" ", na.strings="")
+  } else {
+    metaData <- read.xlsx(metaFileName, colNames = TRUE, sep=" ", na.strings="")
+  }
+  metaData[, grepl("date", tolower(names(metaData)))] <- metaData[, grepl("date", tolower(names(metaData)))] %>% mutate(across(everything(), ~ replace(., is.na(.), 0))) %>% mutate(across(everything(), ~ as_date(., origin = "1899-12-30"))) %>% mutate(across(where(is.Date), ~ na_if(.x,as.Date("1899-12-30"))))
+  metaData <- metaData %>% mutate(across(where(is.numeric), as.factor))
+  metaData <- metaData %>% mutate(across(!where(lubridate::is.Date) & names(which(sapply(metaData,nlevels) > facToNum*nrow(metaData))), function(x) as.numeric((levels(x))[x])))
+  metaData <- metaData %>% mutate(across(!where(is.numeric) & !where(lubridate::is.Date) & colnames(metaData[!colnames(metaData) %in% metaConCol]), as.factor))
+  metaData <- metaData %>% mutate(across(!where(is.numeric) & !where(lubridate::is.Date) & names(which(sapply(metaData,nlevels) > facToChar*nrow(metaData))), as.character))
+  nMetaCols <- ncol(metaData)
+} else {
+  if(is.null(nMetaCols)){
+    if(traitFileName!=""){
+      traitData[, grepl("date", tolower(names(traitData)))] <- traitData[, grepl("date", tolower(names(traitData)))] %>% mutate(across(everything(), ~ replace(., is.na(.), 0))) %>% mutate(across(everything(), ~ as_date(., origin = "1899-12-30"))) %>% mutate(across(where(is.Date), ~ na_if(.x,as.Date("1899-12-30"))))
+      metaCols <- c(colnames(traitData %>% 
+                               select(-names(which(sapply(traitData[,colSums(is.na(traitData %>% mutate(across(!where(is.numeric), as.numeric))))-colSums(is.na(traitData))==0] %>% mutate(across(where(is.numeric), as.factor)), nlevels) > facToChar*nrow(traitData)) & which(sapply(traitData, is.Date))))))
+    } else {
+      derivedData[, grepl("date", tolower(names(derivedData)))] <- derivedData[, grepl("date", tolower(names(derivedData)))] %>% mutate(across(everything(), ~ replace(., is.na(.), 0))) %>% mutate(across(everything(), ~ as_date(., origin = "1899-12-30"))) %>% mutate(across(where(is.Date), ~ na_if(.x,as.Date("1899-12-30"))))
+      metaCols <- c(colnames(derivedData %>% select(-names(which(sapply(derivedData[,colSums(is.na(derivedData %>% mutate(across(!where(is.numeric), as.numeric))))-colSums(is.na(derivedData))==0] %>% mutate(across(where(is.numeric), as.factor)), nlevels) > facToChar*nrow(derivedData)) & which(sapply(derivedData, is.Date))))))
+    }
+    nMetaCols <- length(metaCols)
+  } else {
+    metaCols <- colnames(raw_data[1:nMetaCols])
+  }
+  if(traitFileName!=""){
+    metaData <- traitData %>% select(1:all_of(nMetaCols)) %>% mutate(across(where(is.numeric), as.factor))
+  } else {
+    metaData <- derivedData %>% select(1:all_of(nMetaCols)) %>% mutate(across(where(is.numeric), as.factor))
+  }
+  metaData <- metaData %>% mutate(across(names(which(sapply(metaData,nlevels) > facToNum*nrow(metaData) & !sapply(metaData, is.Date))), function(x) as.numeric((levels(x))[x])))
+  metaData <- metaData %>% mutate(across(!where(is.numeric) & metaCols[!metaCols %in% metaConCol], as.factor))
+  metaData <- metaData %>% mutate(across(!where(is.numeric) & names(which(sapply(metaData,nlevels) > facToChar*nrow(metaData))), as.character))
+  if(traitFileName!=""){
+    metaConCol <- traitConCol
+  } else {
+    metaConCol <- derivedConCol
+  }
+}
+
+#Make final table of trait data
+if(traitFileName!=""){
+  if(length(which(colnames(traitData) %in% colnames(metaData)[!colnames(metaData) %in% c(traitConCol)]))==0){
+    allTraitData <- metaData %>% inner_join(y = traitData, by = c({metaConCol = traitConCol}))
+  } else {
+    allTraitData <- metaData %>% inner_join(y = traitData[,-which(colnames(traitData) %in% colnames(metaData)[!colnames(metaData) %in% c(traitConCol)])], by = c({metaConCol = traitConCol}))
+  }
+  nTraitCols <- ncol(allTraitData)-nMetaCols
+}
+
+#Make final table of derived trait data
+if(derivedFileName!=""){
+  if(length(which(colnames(derivedData) %in% colnames(metaData)[!colnames(metaData) %in% c(derivedConCol)]))==0){
+    allDerivedData <- metaData %>% inner_join(y = derivedData, by = c({metaConCol = derivedConCol}))
+  } else {
+    allDerivedData <- metaData %>% inner_join(y = derivedData[,-which(colnames(derivedData) %in% colnames(metaData)[!colnames(metaData) %in% c(derivedConCol)])], by = c({metaConCol = derivedConCol}))
+  }
+  # filter out all columns with all NA or all 0 or 1
+  allDerivedData.filter <- data.frame(Sums = colSums(allDerivedData[,(nMetaCols+1):ncol(allDerivedData)])!=0 & colSums(allDerivedData[,(nMetaCols+1):ncol(allDerivedData)])!=nrow(allDerivedData) & !is.na(colSums(allDerivedData[,(nMetaCols+1):ncol(allDerivedData)])))
+  allDerivedData.filter <- rownames(allDerivedData.filter %>% filter(Sums == TRUE))
+  allDerivedData <- cbind(allDerivedData[, 1:nMetaCols],allDerivedData[,allDerivedData.filter])
+  nDerivedCols <- ncol(allDerivedData)-nMetaCols
+}
+
+#Make complete final table with all data combined
+if(traitFileName!=""){
+  allData <- allTraitData
+} else {
+  allData <- metaData
+}
+if((derivedFileName!="" && traitFileName=="")|(derivedFileName!="" && traitFileName!=derivedFileName)){
+  if(length(which(colnames(allDerivedData) %in% colnames(metaData)[!colnames(metaData) %in% c(derivedConCol)]))==0){
+    allData <- allData %>% inner_join(y = allDerivedData, by = c({metaConCol = derivedConCol}))
+  } else {
+    allData <- allData %>% inner_join(y = allDerivedData[,-which(colnames(allDerivedData) %in% colnames(metaData)[!colnames(metaData) %in% c(derivedConCol)])], by = c({metaConCol = derivedConCol}))
+  }
+}
+allData <- allData %>% mutate_at(colnames(allData[,(ncol(metaData)+1):ncol(allData)]), as.numeric)
+nDataCols <- ncol(allData)-nMetaCols
+
+if(!is.null(include)){
+  for(i in 1:length(show_filter_include)){
+    allData <- allData %>% 
+      filter(eval(parse(text = show_filter_include[[i]])) %in% include[[i]])
+  }
+}
+
+if(!is.null(exclude)){
+  for(i in 1:length(show_filter_exclude)){
+    allData <- allData %>% 
+      filter(!(eval(parse(text = show_filter_exclude[[i]])) %in% exclude[[i]]))
+  }
+}
+
+#Import IgG data if present
+if(IgGFileName !=""){
+  IgGdata <- read.xlsx(IgGFileName, sheet = sheetNameIgG, colNames= TRUE)
+  IgGdata <- IgGdata %>% filter(Identifier == "Total")
+  IgGdata$Group = as.character(IgGdata$Group)
+
+  combinedData <- left_join(traitData, IgGdata, by=c("sample_id" = "Group"))
+  total_IgG <- combinedData %>% filter(Identifier == "Total") %>% group_by(beat_id) %>% filter(date_sampling == min(date_sampling))
+}
+
+# Extract data of technical samples (visucon and/or sample pool)
+if(technicalCheckFileName != ""){
+  if(sheetNameTechnicalCheck != ""){
+    technicalData <- read.xlsx(technicalCheckFileName, sheet = sheetNameTechnicalCheck, colNames= TRUE)
+  } else {
+    technicalData <- read.xlsx(technicalCheckFileName, colNames= TRUE)
+  }
+} else {
+  technicalData <- allData
+}
+technicalData <- technicalData %>% filter(SampleType %in% c(typeNumVisucon, typeNumPool))
+technicalData <- technicalData[,which(technicalData %>% sapply(function(x)!all(is.na(x))))] %>% droplevels()
+```
+
+```{r technicalCheck per technical group}
+if(technicalCheckFileName != "" | technicalCheck==TRUE && nrow(technicalData)>0){
+  # do technical check first for traits then derived traits
+  plts <- NULL
+  techData<-list()
+  for(i in 1:2){
+    if(i==1){
+      start_col <- which(str_detect(colnames(technicalData), "^[Hh]([0-9]+)[Nn]([0-9]+).*$") == TRUE)[1] # column number where the glycans start, starts with HxNy
+      nMetaColsTech <- start_col-1
+    } else {
+      start_col <- which(str_detect(colnames(technicalData), "\\bTU\\b") == TRUE)[1] # column number where the derived traits start, starts with TU
+    }
+    
+    if(!is.na(start_col)){ # Traits or derived traits found
+      # First determine overall mean and sd for all compounds, grouped by sampletype
+      if(i==1){
+        overallMean <- technicalData %>%
+                       group_by(SampleType) %>% 
+                       select(all_of(c(which(colnames(technicalData) == "SampleType"), start_col:(start_col + nTraitCols - 1)))) %>% 
+                       summarise(across(everything(),mean), .groups='drop') %>% 
+                       as.data.frame() %>% 
+                       pivot_longer(!SampleType,names_to = "Trait", values_to = "mean")
+        overallSD <- technicalData %>%
+                     group_by(SampleType) %>% 
+                     select(all_of(c(which(colnames(technicalData) == "SampleType"), start_col:(start_col + nTraitCols - 1)))) %>% 
+                     summarise(across(everything(),sd), .groups='drop') %>% 
+                     as.data.frame() %>% 
+                     pivot_longer(!SampleType,names_to = "Trait", values_to = "sd")
+        overallCV <- overallMean %>% 
+                     inner_join(y=overallSD, by=c("SampleType","Trait")) %>% 
+                     mutate(CV=(sd/mean)*100) %>% 
+                     replace(is.na(.), 0) %>% 
+                     group_by(SampleType) %>% 
+                     add_column(traitGroup = "Glycan", .before=1) %>%
+                     inner_join(y=technicalData %>%
+                                  group_by(SampleType) %>% 
+                                  count(SampleType), by="SampleType")
+      } else {
+        overallMean <- technicalData %>%
+                       group_by(SampleType) %>% 
+                       select(all_of(c(which(colnames(technicalData) == "SampleType"), start_col:(start_col + nDerivedCols - 1))), -any_of(c("MM"))) %>% 
+                       summarise(across(everything(),mean), .groups='drop') %>% 
+                       as.data.frame() %>% 
+                       pivot_longer(!SampleType,names_to = "Trait", values_to = "mean")
+        overallSD <- technicalData %>%
+                     group_by(SampleType) %>% 
+                     select(all_of(c(which(colnames(technicalData) == "SampleType"), start_col:(start_col + nDerivedCols - 1))), -any_of(c("MM"))) %>% 
+                     summarise(across(everything(),sd), .groups='drop') %>% 
+                     as.data.frame() %>% 
+                     pivot_longer(!SampleType,names_to = "Trait", values_to = "sd")
+        overallCV <- rbind(overallCV, overallMean %>% 
+                                      inner_join(y=overallSD, by=c("SampleType","Trait")) %>% 
+                                      mutate(CV=(sd/mean)*100) %>% 
+                                      replace(is.na(.), 0) %>% 
+                                      add_column(traitGroup = "Trait", .before=1) %>%
+                                      inner_join(y=technicalData %>%
+                                                 group_by(SampleType) %>% 
+                                                 count(SampleType), by="SampleType")) %>%
+                     group_by(traitGroup, SampleType)
+      }
+    }
+  }
+  
+  # First determine overall mean and sd for the first topX compounds per group
+  overallTop <- overallCV %>% 
+                arrange(desc(mean)) %>%
+                slice_head(n=topN) %>%
+                mutate(minCV=min(CV)) %>%
+                mutate(maxCV=max(CV))
+ 
+  cnames <- overallTop %>% 
+            group_by(traitGroup, SampleType) %>% 
+            select(traitGroup, SampleType, Trait) %>%
+            mutate(Var=factor(paste0('Glycan_Trait_',row_number()),
+                              levels = paste0('Glycan_Trait_',1:25),
+                              labels = paste0('Glycan_Trait_',1:25),
+                              ordered = T,
+                              exclude = F)) %>% 
+            complete(Var = Var) %>% pivot_wider(names_from = Var, values_from = Trait)
+
+  for(n in 1:nrow(cnames)){
+    techData[["data"]][[paste0(cnames$traitGroup[n],"_",cnames$SampleType[n])]] <- technicalData %>%
+            filter(SampleType == cnames$SampleType[n]) %>%
+            select(all_of(c(colnames(technicalData)[1:nMetaColsTech], as.character(cnames[n,3:(topN+2)]))))
+  }
+
+  for(tc in technicalColumnsToCheck){
+    if(tc %in% colnames(technicalData))
+    {
+      techData[["Totals"]][[paste0("techTotalsGlycan",tc)]] <- list()
+      techData[["Totals"]][[paste0("techTotalsTrait",tc)]] <- list()
+      for(t in names(techData[["data"]])){
+        techData[["summary"]][[paste0(t,"mean")]] <- data.frame(techData[["data"]][[t]]) %>%
+          select(-any_of(c(colnames(technicalData)[1:nMetaColsTech])), any_of(c(tc))) %>% 
+          relocate(any_of(c(tc)), .before=1) %>%
+          group_by(!!! rlang::syms(tc)) %>% 
+          summarise(across(everything(),mean), .groups='drop') %>% 
+          as.data.frame() %>% 
+          pivot_longer(!tc,names_to = "Trait", values_to = "mean")
+        techData[["summary"]][[paste0(t,"sd")]] <- data.frame(techData[["data"]][[t]]) %>%
+          select(-any_of(c(colnames(technicalData)[1:nMetaColsTech])), any_of(c(tc))) %>% 
+          relocate(any_of(c(tc)), .before=1) %>%
+          group_by(!!! rlang::syms(tc)) %>% 
+          summarise(across(everything(),sd), .groups='drop') %>% 
+          as.data.frame() %>% 
+          pivot_longer(!tc,names_to = "Trait", values_to = "sd")
+        techData[["summary"]][[paste0(t,"CV")]] <- data.frame(techData[["summary"]][[paste0(t,"mean")]]) %>% 
+          inner_join(y=data.frame(techData[["summary"]][[paste0(t,"sd")]]), by = c(tc, "Trait")) %>% 
+          mutate(CV=(sd/mean)*100) %>% 
+          mutate(minCV=min(CV)) %>%
+          mutate(maxCV=max(CV)) %>%
+          replace(is.na(.), 0) %>% 
+          mutate(SampleType = strsplit(t, "_")[[1]][2], .before=1) %>%
+          mutate(traitGroup = strsplit(t, "_")[[1]][1], .before=1) %>%
+          inner_join(y=techData[["data"]][[t]] %>%
+                       group_by(!!sym(tc)) %>% 
+                       count(!!sym(tc)), by = tc) %>%
+          unite(Label, !!sym(tc), SampleType, sep="_", remove= FALSE) %>%
+          mutate(SampleType = factor(SampleType), traitGroup=factor(traitGroup), Label = factor(Label)) %>%
+          group_by(traitGroup, !!sym(tc))
+        techData[["Totals"]][[paste0("techTotals",strsplit(t, "_")[[1]][1],tc)]] <- rbind(techData[["Totals"]][[paste0("techTotals",strsplit(t, "_")[[1]][1],tc)]], techData[["summary"]][[paste0(t,"CV")]])
+      }
+      
+      for(plts in c(paste0("techTotalsGlycan",tc), paste0("techTotalsTrait",tc))){
+        if(tc=="SampleType"){
+          
+        } else {
+          
+        }
+        techData[["plots"]][[paste0("my_barplot_", substring(plts,11))]] <- data.frame(techData[["Totals"]][[plts]]) %>% 
+          complete(nesting(!!!rlang::syms(unique(c(tc, "Label", "SampleType", "traitGroup")))), Trait) %>%
+          group_by(!!sym(tc)) %>%
+          ggplot(aes(x=Trait, y=mean, fill=Label)) +
+          geom_col(width=0.7, position=position_dodge(0.7), na.rm = FALSE) +
+          geom_errorbar(aes(x=Trait, ymin=mean-sd, ymax=mean+sd), linewidth=0.15, width=0.3, alpha=0.9, position=position_dodge(.7)) +
+          ggtitle("Variation") +
+          theme(axis.text.x = element_text(angle = 45,
+                                           hjust = 1,
+                                           vjust = 1)) +
+          labs(x=plts, y="mean(relative abundance)")
+        figFilename <- paste0("Repeatability ", substring(plts,11), " ", format(Sys.time(), "%Y-%m-%d %H_%M_%OS2"), ".pdf", sep="")
+        ggsave(file=figFilename, plot=techData[["plots"]][[paste0("my_barplot_", substring(plts,11))]], width=10, height=7, limitsize = FALSE)
+      }
+    }
+  }
+  
+  print("Summary overall")
+  print(overallCV %>% filter(!(CV==0)))
+  
+  print(paste0("Summary for the top-",topN," (highest mean) traits per technical group"))
+  print(overallTop)
+  
+  print("CV averages per technical group")
+  print(overallCV %>% select(traitGroup, SampleType, CV) %>% filter(!(CV==0)) %>% summarize(averageCV = mean(CV), minCV = min(CV), maxCV = max(CV), n = n()))
+  
+  print(paste0("CV averages per technical group for the top-",topN," (highest mean)"))
+  print(overallTop %>% select(traitGroup, SampleType, CV) %>% summarize(averageCV = mean(CV), minCV = min(CV), maxCV = max(CV)))
+}
+```
+
+```{r technicalCheck per sample group}
+if(technicalCheck==TRUE){
+  # calculated CV for cases and controls: first for traits then derived traits
+  plts <- NULL
+  caseControlData<-list()
+  for(i in 1:2){
+    if(i==1){
+      start_col <- which(str_detect(colnames(allData), "^[Hh]([0-9]+)[Nn]([0-9]+).*$") == TRUE)[1] # column number where the glycans start, starts with HxNy
+      #nMetaColsTech <- start_col-1
+    } else {
+      start_col <- which(str_detect(colnames(allData), "\\bTU\\b") == TRUE)[1] # column number where the derived traits start, starts with TU
+    }
+    
+    if(!is.na(start_col)){ # Traits or derived traits found
+      # First determine overall mean and sd for all compounds, grouped by sampletype
+      if(i==1){
+        overallMean <- allData %>%
+                       filter(SampleType %in% c(typeNumCase, typeNumControl)) %>%
+                       group_by(SampleType) %>% 
+                       select(all_of(c(which(colnames(allData) == "SampleType"), start_col:(start_col + nTraitCols - 1)))) %>% 
+                       summarise(across(everything(),mean), .groups='drop') %>% 
+                       as.data.frame() %>% 
+                       pivot_longer(!SampleType,names_to = "Trait", values_to = "mean")
+        overallSD <- allData %>%
+                     filter(SampleType %in% c(typeNumCase, typeNumControl)) %>%
+                     group_by(SampleType) %>% 
+                     select(all_of(c(which(colnames(allData) == "SampleType"), start_col:(start_col + nTraitCols - 1)))) %>% 
+                     summarise(across(everything(),sd), .groups='drop') %>% 
+                     as.data.frame() %>% 
+                     pivot_longer(!SampleType,names_to = "Trait", values_to = "sd")
+        overallCV <- overallMean %>% 
+                     inner_join(y=overallSD, by=c("SampleType","Trait")) %>% 
+                     mutate(CV=(sd/mean)*100) %>% 
+                     replace(is.na(.), 0) %>% 
+                     group_by(SampleType) %>% 
+                     add_column(traitGroup = "Glycan", .before=1) %>%
+                     inner_join(y=allData %>%
+                                  group_by(SampleType) %>% 
+                                  count(SampleType), by="SampleType")
+      } else {
+        overallMean <- allData %>%
+                       filter(SampleType %in% c(typeNumCase, typeNumControl)) %>%
+                       group_by(SampleType) %>% 
+                       select(all_of(c(which(colnames(allData) == "SampleType"), start_col:(start_col + nDerivedCols - 1))), -any_of(c("MM"))) %>% 
+                       summarise(across(everything(),mean), .groups='drop') %>% 
+                       as.data.frame() %>% 
+                       pivot_longer(!SampleType,names_to = "Trait", values_to = "mean")
+        overallSD <- allData %>%
+                     filter(SampleType %in% c(typeNumCase, typeNumControl)) %>%
+                     group_by(SampleType) %>% 
+                     select(all_of(c(which(colnames(allData) == "SampleType"), start_col:(start_col + nDerivedCols - 1))), -any_of(c("MM"))) %>% 
+                     summarise(across(everything(),sd), .groups='drop') %>% 
+                     as.data.frame() %>% 
+                     pivot_longer(!SampleType,names_to = "Trait", values_to = "sd")
+        overallCV <- rbind(overallCV, overallMean %>% 
+                                      inner_join(y=overallSD, by=c("SampleType","Trait")) %>% 
+                                      mutate(CV=(sd/mean)*100) %>% 
+                                      replace(is.na(.), 0) %>% 
+                                      add_column(traitGroup = "Trait", .before=1) %>%
+                                      inner_join(y=allData %>%
+                                                 group_by(SampleType) %>% 
+                                                 count(SampleType), by="SampleType")) %>%
+                     group_by(traitGroup, SampleType)
+      }
+    }
+  }
+  
+  # Determine overall mean and sd for the first topX compounds per group
+  overallTop <- overallCV %>% 
+                arrange(desc(mean)) %>%
+                slice_head(n=topN) %>%
+                mutate(minCV=min(CV)) %>%
+                mutate(maxCV=max(CV))
+ 
+  cnames <- overallTop %>% 
+            group_by(traitGroup, SampleType) %>% 
+            select(traitGroup, SampleType, Trait) %>%
+            mutate(Var=factor(paste0('Glycan_Trait_',row_number()),
+                              levels = paste0('Glycan_Trait_',1:25),
+                              labels = paste0('Glycan_Trait_',1:25),
+                              ordered = T,
+                              exclude = F)) %>% 
+            complete(Var = Var) %>% pivot_wider(names_from = Var, values_from = Trait)
+  
+  for(n in 1:nrow(cnames)){
+    caseControlData[["data"]][[paste0(cnames$traitGroup[n],"_",cnames$SampleType[n])]] <- allData %>%
+            filter(SampleType == cnames$SampleType[n]) %>%
+            select(all_of(c(colnames(technicalData)[1:nMetaColsTech], as.character(cnames[n,3:(topN+2)]))))
+  }
+  
+  for(tc in technicalColumnsToCheck){
+    if(tc %in% colnames(technicalData))
+    {
+      caseControlData[["Totals"]][[paste0("caseControlTotalsGlycan",tc)]] <- list()
+      caseControlData[["Totals"]][[paste0("caseControlTotalsTrait",tc)]] <- list()
+      for(t in names(caseControlData[["data"]])){
+        caseControlData[["summary"]][[paste0(t,"mean")]] <- data.frame(caseControlData[["data"]][[t]]) %>%
+          select(-any_of(c(colnames(technicalData)[1:nMetaColsTech])), any_of(c(tc))) %>% 
+          relocate(any_of(c(tc)), .before=1) %>%
+          group_by(!!! rlang::syms(tc)) %>%  
+          summarise(across(everything(),mean), .groups='drop') %>% 
+          as.data.frame() %>% 
+          pivot_longer(!tc,names_to = "Trait", values_to = "mean")
+        caseControlData[["summary"]][[paste0(t,"sd")]] <- data.frame(caseControlData[["data"]][[t]]) %>%
+          select(-any_of(c(colnames(technicalData)[1:nMetaColsTech])), any_of(c(tc))) %>% 
+          relocate(any_of(c(tc)), .before=1) %>%
+          group_by(!!! rlang::syms(tc)) %>% 
+          summarise(across(everything(),sd), .groups='drop') %>% 
+          as.data.frame() %>% 
+          pivot_longer(!tc,names_to = "Trait", values_to = "sd")
+        caseControlData[["summary"]][[paste0(t,"CV")]] <- data.frame(caseControlData[["summary"]][[paste0(t,"mean")]]) %>% 
+          inner_join(y=data.frame(caseControlData[["summary"]][[paste0(t,"sd")]]), by = c(tc, "Trait")) %>% 
+          mutate(CV=(sd/mean)*100) %>% 
+          mutate(minCV=min(CV)) %>%
+          mutate(maxCV=max(CV)) %>%
+          replace(is.na(.), 0) %>% 
+          mutate(SampleType = strsplit(t, "_")[[1]][2], .before=1) %>%
+          mutate(traitGroup = strsplit(t, "_")[[1]][1], .before=1) %>%
+          inner_join(y=caseControlData[["data"]][[t]] %>%
+                       group_by(!!sym(tc)) %>% 
+                       count(!!sym(tc)), by = tc) %>%
+          unite(Label, !!sym(tc), SampleType, sep="_", remove= FALSE) %>%
+          mutate(SampleType = factor(SampleType), traitGroup=factor(traitGroup), Label = factor(Label)) %>%
+          group_by(traitGroup, !!sym(tc))
+        caseControlData[["Totals"]][[paste0("caseControlTotals",strsplit(t, "_")[[1]][1],tc)]] <- rbind(caseControlData[["Totals"]][[paste0("caseControlTotals",strsplit(t, "_")[[1]][1],tc)]], caseControlData[["summary"]][[paste0(t,"CV")]])
+      }
+      
+      for(plts in c(paste0("caseControlTotalsGlycan",tc), paste0("caseControlTotalsTrait",tc))){
+        caseControlData[["plots"]][[paste0("my_barplot_", substring(plts,18))]] <- data.frame(caseControlData[["Totals"]][[plts]]) %>% 
+          complete(nesting(!!!rlang::syms(unique(c(tc, "Label", "SampleType", "traitGroup")))), Trait) %>%
+          group_by(!!sym(tc)) %>%
+          ggplot(aes(x=Trait, y=mean, fill=Label)) +
+          geom_col(width=0.7, position=position_dodge(0.7), na.rm = FALSE) +
+          geom_errorbar(aes(x=Trait, ymin=mean-sd, ymax=mean+sd), linewidth=0.15, width=0.3, alpha=0.9, position=position_dodge(.7)) +
+          ggtitle("Variation") +
+          theme(axis.text.x = element_text(angle = 45,
+                                           hjust = 1,
+                                           vjust = 1)) +
+          labs(x=plts, y="mean(relative abundance)")
+        figFilename <- paste0("Variation ", substring(plts,18), " ", format(Sys.time(), "%Y-%m-%d %H_%M_%OS2"), ".pdf", sep="")
+        ggsave(file=figFilename, plot=caseControlData[["plots"]][[paste0("my_barplot_", substring(plts,18))]], width=10, height=7, limitsize = FALSE)
+      }
+    }
+  }
+
+  print("Summary overall")
+  print(overallCV %>% filter(!(CV==0)))
+  
+  print(paste0("Summary for the top-",topN," (highest mean) traits per biological group"))
+  print(overallTop)
+  
+  print("CV averages per biological group")
+  print(overallCV %>% select(traitGroup, SampleType, CV) %>% filter(!(CV==0)) %>% summarize(averageCV = mean(CV), minCV = min(CV), maxCV = max(CV), n = n()))
+  
+  print(paste0("CV averages per biological group for the top-",topN," (highest mean)"))
+  print(overallTop %>% select(traitGroup, SampleType, CV) %>% summarize(averageCV = mean(CV), minCV = min(CV), maxCV = max(CV)))
+}
+```
+
+# Known Age trends
+### H3N4F1 and H3N5F1 up, H4N4F1 zero, H5N4F1 and A2FS0G down
+
+```{r Age_dependencies, out.width ="100%", fig.height =15}
+#if(!isTRUE(all.equal(allData, metaData, convert = TRUE))){
+  # Paper Gerda: https://onlinelibrary.wiley.com/doi/10.1002/cam4.3439
+  # Non published data from Viktoria
+  if(!is.null(ageColumn)){
+  ageCheck <- c("H3N4F1", "H3N4F1E0L0", "H3N5F1", "H3N5F1E0L0", "H4N4F1", "H4N4F1E0L0", "H5N4F1", "H5N4F1E0L0", "A2FS0G") # should go (up, up, equal, down, down)
+
+  ageColumn = ensym(ageColumn)
+  ageData <- allData[,c(1:nMetaCols, which(colnames(allData) %in% ageCheck))]
+#  ageData <- allData %>% select(which(colnames(allData) %in% colnames(metaData), which(colnames(allData) %in% ageCheck)))
+  # scale data (minus mean and divide by SD)
+    # scale data (minus mean and divide by SD)
+  ageData.scaled <- cbind(allData[,c(1:nMetaCols)], t((t(ageData[,which(colnames(ageData) %in% ageCheck)]) - colMeans(ageData[,which(colnames(ageData) %in% ageCheck)])) / GMCM:::colSds(as.matrix(ageData[,which(colnames(ageData) %in% ageCheck)])))) %>% filter(!is.na({{ ageColumn }}))
+  for(gly in colnames(ageData.scaled[,which(colnames(ageData.scaled) %in% ageCheck)])) {
+    ageData.scaled <- eval(parse(text=paste("cbind(ageData.scaled, ", gly, "resid = resid(lm( formula = ", gly, " ~ ", ageColumn, ", data=ageData.scaled)))", sep="")))
+  }
+  ageData <- ageData.scaled %>% filter(!(SampleType %in% c(typeNumVisucon, typeNumPool))) %>% select(c(1:all_of(nMetaCols), which(colnames(ageData.scaled) %in% ageCheck))) %>% reshape2::melt(measure = which(colnames(ageData.scaled) %in% ageCheck), varnames=names(dimnames(ageData.scaled)), value.name = "value")
+  ageData.resid <- ageData.scaled %>% filter(!(SampleType %in% c(typeNumVisucon, typeNumPool))) %>% select(c(1:all_of(nMetaCols), which(colnames(ageData.scaled) %in% paste(ageCheck, "resid", sep=""))))
+  ageData.resid <- ageData.resid %>% reshape2::melt(measure = which(colnames(ageData.resid) %in% paste(ageCheck, "resid", sep="")), varnames=names(dimnames(ageData.resid)), value.name = "value")
+  nTraits <- length(which(colnames(ageData.scaled) %in% ageCheck))
+  nCols <- if(nTraits==1) { 1 }else{ 2 }
+  
+  if(is.factor(ageData[[ageColumn]])){
+    ageData <- ageData %>% mutate_at(c(paste(ageColumn)), function(x) as.numeric((levels(x))[x]))
+  }
+  
+  minmax <- cbind((ageData %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(minx = min({{ ageColumn }}), maxy = max(value))), (ageData %>% 
+    dplyr::group_by(variable) %>%
+    do(label = lm_eqn(lm( formula = eval(parse(text = paste("value ~ ", ageColumn, sep=""))), data = .))))[,2], (ageData %>% dplyr::group_by(variable) %>% do(model=lm( formula = eval(parse(text = paste("value ~ ", ageColumn, sep=""))), data = .)))[2])
+  
+  if(is.factor(ageData.resid[[ageColumn]])){
+    ageData.resid <- ageData.resid %>% mutate_at(c(paste(ageColumn)), function(x) as.numeric((levels(x))[x]))
+  }
+  minmax.resid <- cbind((ageData.resid %>% 
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(minx = min({{ ageColumn }}), maxy = max(value))), (ageData.resid %>% 
+    dplyr::group_by(variable) %>%
+    do(label = lm_eqn(lm( formula = eval(parse(text = paste("value ~ ", ageColumn, sep=""))), data = .))))[,2], (ageData.resid %>% dplyr::group_by(variable) %>% do(model=lm( formula = eval(parse(text = paste("value ~ ", ageColumn, sep=""))), data = .)))[2])
+  agePlot <- ageData %>%
+      ggplot(aes(x = {{ ageColumn }},
+                 y = value)) + geom_point(aes(colour = SampleType)) + 
+      geom_smooth(method="lm", formula = y ~ x)  +
+      facet_wrap( ~ variable, scales="free", ncol = nCols) +
+      geom_text(data = minmax, x = minmax$minx, y = minmax$maxy, label = minmax$label,
+             hjust = 0, parse = TRUE)
+  if(is.factor(ageData[[ageColumn]])){
+    agePlot <- agePlot + geom_boxplot(aes(fill = {{ageColumn}}), outlier.shape = NA)
+  }
+  modelhist <- ageData.resid %>%
+      ggplot(aes(x = value)) +
+      geom_histogram(binwidth = 0.05) +
+      facet_wrap( ~ variable, scales="free", ncol = nCols)
+  modelQQ <- ageData.resid %>%
+      ggplot(aes(sample = value)) +
+      geom_qq() +
+      geom_qq_line() +
+      facet_wrap( ~ variable, scales="free", ncol = nCols)
+  homeoplot <- ageData.resid %>%
+      ggplot(aes(x = {{ ageColumn }},
+                 y = value)) + geom_point(aes(colour = SampleType)) + 
+      geom_smooth(method="lm", formula = y ~ x) +
+      geom_text(data = minmax.resid, x = minmax.resid$minx, y = minmax.resid$maxy, label = minmax.resid$label,
+             hjust = 0, parse = TRUE) +
+      facet_wrap( ~ variable, scales="free", ncol = nCols)
+
+  if(length(which(colnames(allData) %in% ageCheck))>0){
+    plot(agePlot)
+    plot(modelhist)
+    plot(modelQQ)
+    plot(homeoplot)
+  }
+} else {
+  print("Not executed")
+}
+```
+
+# Known Sex trends
+### Male should be higher
+
+```{r Sex_dependencies, out.width ="100%", out.height ="100%"}
+#if(!isTRUE(all.equal(allData, metaData, convert = TRUE)) && derivedFileName!=""){
+sexCheck <- c("A3F", "A4F") #Especially derived traits: should be higher in male
+if(!is.null(sexColumn) & derivedFileName!="" & length(which(colnames(allData) %in% sexCheck))>1){
+  # Paper Gerda: https://onlinelibrary.wiley.com/doi/10.1002/cam4.3439
+  # Non published data from Viktoria
+  sexData <- allData[,c(1:nMetaCols, which(colnames(allData) %in% sexCheck))]
+  sexData <- sexData %>% filter(!(SampleType %in% c(typeNumVisucon, typeNumPool))) %>% reshape2::melt(measure = which(colnames(sexData) %in% sexCheck), varnames=names(dimnames(sexData)), value.name = "value")
+  sexColumn = ensym(sexColumn)
+  sexPlot <- sexData %>%
+      ggplot(aes(x = {{ sexColumn }},
+                 y = value)) +
+      geom_boxplot(aes(fill = {{sexColumn}}), outlier.shape = NA) +
+      geom_point(aes(colour = SampleType)) + 
+      facet_wrap( ~ variable, scales="free", ncol = 2)
+  if(length(which(colnames(allData) %in% sexCheck))>0){
+    plot(sexPlot)
+  }
+} else {
+  print("Not executed: data (glycosylation traits A3F and A4F) not available")
+}
+```
+
+# Total IgG galactosylation vs. A2G
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.galactosylation", y = "A2G", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Total IgG galactosylation", ylab = "A2G")
+
+  #If you want, you can easily color the any variable (e.g. ICU, non-ICU) by adding to the above code.
+
+  # ggscatter(data, x = "total_IgG_galactosylation", y = "A2G",
+  #           add = "reg.line", conf.int = TRUE,
+  #           cor.coef = TRUE, cor.method = "spearman",
+  #           xlab = "Total IgG galactosylation", ylab = "A2G") +
+  # stat_cor(aes(color = ward))
+} else {
+  print("Not executed")
+}
+```
+# Total IgG galactosylation vs. A2FS0G
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.galactosylation", y = "A2FS0G", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Total IgG galactosylation", ylab = "A2FS0G")
+} else {
+  print("Not executed")
+}
+```
+
+# Total IgG galactosylation vs. CG
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.galactosylation", y = "CG", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Total IgG galactosylation", ylab = "CG")
+} else {
+  print("Not executed")
+}
+```
+
+# Total IgG galactosylation vs. TA2FS0
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.galactosylation", y = "TA2FS0", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Total IgG galactosylation", ylab = "TA2FS0")
+} else {
+  print("Not executed")
+}
+```
+
+# IgG1 bisection vs. CB
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.bisection", y = "CB", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "IgG1 bisection", ylab = "CB")
+} else {
+  print("Not executed")
+}
+```
+
+# IgG1 bisection vs. A2B
+
+```{r}
+if(traitFileName != "" && IgGFileName !=""){
+  ggscatter(total_IgG, x = "IgG1.bisection", y = "A2B", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "IgG1 bisection", ylab = "A2B")
+} else {
+  print("Not executed")
+}
+```
