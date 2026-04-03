@@ -1,5 +1,5 @@
 # Glycomics R Processing Pipeline
-This repository contains the R-scripts used for glycomics and glycoproteomics data processing for the publication with DOI:.
+This repository contains the R-scripts used for glycomics data processing for the publication with DOI:.
 
 After using [MassyTools](https://github.com/Tarskin/MassyTools/releases/tag/v2.1.6) and conversion of the output into an Excel file (.xlsx) you can use the data in the following scripts.
 The order to run the scripts is:
