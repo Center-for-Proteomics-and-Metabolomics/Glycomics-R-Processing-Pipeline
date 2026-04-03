@@ -1,0 +1,131 @@
+---
+title: "Script to make a readable input for curation script"
+Author: "Elham Memarian/Marco Bladergroen"
+date: "version: 11, 02-04-2024 executed , `r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding, output_file = file.path(dirname(inputFile), paste0('MassyTools to R-Readable ', Sys.Date(), '.html'))) })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(openxlsx)
+library(dplyr)
+library(knitr)
+library(tibble)
+```
+
+## Settings
+```{r settings, include=TRUE}
+# set working directory and filenames.
+wd <- getwd()
+inputFileName <- "<Summary file from MassyTools>.xlsx"
+outputFileName <- "<Any output filename you like. Default: MassyTools Raw Data>.xlsx"
+
+inputFileName <- paste(wd, inputFileName, sep="/")
+outputFileName <- paste(wd, outputFileName, sep="/")
+```
+
+## Load data
+```{r load_data}
+wb <- loadWorkbook(inputFileName)
+allData <- read.xlsx(wb, colNames= FALSE, skipEmptyRows = FALSE, sep.names=" ")
+
+emptyRows <- which(rowSums(is.na(allData)) == ncol(allData))
+```
+
+## Build output columns
+```{r Build_output_columns}
+# Build output columns one by one to match desired output
+# Total Intensity
+Total_intensity <- allData %>% slice(which(allData[1]=="Corrected Relative Area - Background Area"):(as.numeric(names(which(emptyRows>which(allData[1]=="Corrected Relative Area - Background Area")))[1])-1))
+names(Total_intensity) <- c("xy_filename", Total_intensity[1,2:ncol(Total_intensity)])
+Total_intensity <- Total_intensity %>% select("xy_filename", "Total Intensity") %>% slice(4:nrow(Total_intensity)) %>% mutate(across(.cols=2, as.numeric))
+
+# Fraction of spectrum in analytes
+Fraction_of_spectrum_in_analytes <- allData %>% slice((which(allData[1]=="Fraction of spectrum in analytes")+1):(as.numeric(names(which(emptyRows>which(allData[1]=="Fraction of spectrum in analytes")))[1])-1))
+Fraction_of_spectrum_in_analytes <- Fraction_of_spectrum_in_analytes %>% select(c(1,3)) %>% mutate(across(.cols=2, as.numeric))
+names(Fraction_of_spectrum_in_analytes) <- c("xy_filename", "Fraction of spectrum in analytes")
+
+# Fraction of Analyte above S/N cut-off (9)
+Fraction_of_Analyte_above_StoN_cut_off9 <- allData %>% slice((which(allData[1]=="Fraction of Analyte above S/N cut-off (9)")+1):(as.numeric(names(which(emptyRows>which(allData[1]=="Fraction of Analyte above S/N cut-off (9)")))[1])-1))
+Fraction_of_Analyte_above_StoN_cut_off9 <- Fraction_of_Analyte_above_StoN_cut_off9 %>% select(c(1,3)) %>% mutate(across(.cols=2, as.numeric))
+names(Fraction_of_Analyte_above_StoN_cut_off9) <- c("xy_filename", "Fraction of Analyte above S/N cut-off (9)")
+
+# Fraction of Analyte Area - Background Area above S/N cut-off (9)
+Fraction_of_Analyte_Area_Background_Area_above_StoN_cut_off9  <- allData %>% slice((which(allData[1]=="Fraction of Analyte Area - Background Area above S/N cut-off (9)")+1):(as.numeric(names(which(emptyRows>which(allData[1]=="Fraction of Analyte Area - Background Area above S/N cut-off (9)")))[1])-1))
+Fraction_of_Analyte_Area_Background_Area_above_StoN_cut_off9 <- Fraction_of_Analyte_Area_Background_Area_above_StoN_cut_off9 %>% select(c(1,3)) %>% mutate(across(.cols=2, as.numeric))
+names(Fraction_of_Analyte_Area_Background_Area_above_StoN_cut_off9) <- c("xy_filename", "Fraction of Analyte Area - Background Area above S/N cut-off (9)")
+
+# Signal to Noise
+StoN <- allData %>% slice(which(allData[1]=="S/N"):(as.numeric(names(which(emptyRows>which(allData[1]=="S/N")))[1])-1))
+StoN <- StoN %>% select(-which(colSums(is.na(StoN)) == nrow(StoN))) # allData is all character initially. The total number of columns is determined by the largest number. Therefore, some blocks have one or more empty columns in the end. This step is to remove an all empty column.
+names(StoN) <- c("xy_filename", "Calibrated", paste("S/N", StoN[2,3:ncol(StoN)], StoN[1,3:ncol(StoN)], sep ="_"))
+StoN <- StoN %>% select(-c("Calibrated"))
+StoN <- StoN %>% slice(3:nrow(StoN)) %>% mutate(across(.cols=c(2:ncol(StoN)), as.numeric))
+
+# Isotopic Pattern Quality
+IPQ <- allData %>% slice(which(allData[1]=="IPQ"):(as.numeric(names(which(emptyRows>which(allData[1]=="IPQ")))[1])-1))
+IPQ <- IPQ %>% select(-which(colSums(is.na(IPQ)) == nrow(IPQ)))
+names(IPQ) <- c("xy_filename", "Calibrated", paste("IPQ",IPQ[2,3:ncol(IPQ)], IPQ[1,3:ncol(IPQ)],sep ="_"))
+IPQ <- IPQ %>% select(-c("Calibrated"))
+IPQ <- IPQ %>% slice(3:nrow(IPQ)) %>% mutate(across(.cols=c(2:ncol(IPQ)), as.numeric))
+
+# PPM
+PPM <- allData %>% slice(which(allData[1]=="Mass Accuracy [ppm]"):(as.numeric(names(which(emptyRows>which(allData[1]=="Mass Accuracy [ppm]")))[1])-1))
+PPM <- PPM %>% select(-which(colSums(is.na(PPM)) == nrow(PPM)))
+names(PPM) <- c("xy_filename", "Calibrated", paste("PPM",PPM[2,3:ncol(PPM)], PPM[1,3:ncol(PPM)],sep ="_"))
+PPM <- PPM %>% select(-c("Calibrated"))
+PPM <- PPM %>% slice(3:nrow(PPM)) %>% mutate(across(.cols=c(2:ncol(PPM)), as.numeric))
+
+# Absolute PPM
+AbsPPM <- PPM
+names(AbsPPM) <- c("xy_filename", paste("AbsPPM",substr(names(PPM[2:ncol(PPM)]), 5, nchar(names(PPM[2:ncol(PPM)]))),sep ="_"))
+AbsPPM <- AbsPPM %>% mutate(across(where(is.numeric), abs))
+
+# Corrected Area minus Background Area
+CorrArea_BG <- allData %>% slice(which(allData[1]=="Corrected Relative Area - Background Area"):(as.numeric(names(which(emptyRows>which(allData[1]=="Corrected Relative Area - Background Area")))[1])-1))
+CorrArea_BG <- CorrArea_BG %>% select(-ncol(CorrArea_BG))
+names(CorrArea_BG) <- c("xy_filename", "Calibrated", paste("CorrArea-BG", CorrArea_BG[2,3:ncol(CorrArea_BG)], CorrArea_BG[1,3:ncol(CorrArea_BG)],sep ="_"))
+CorrArea_BG <- CorrArea_BG %>% select(-c("Calibrated"))
+CorrArea_BG <- CorrArea_BG %>% slice(4:nrow(CorrArea_BG)) %>% mutate(across(.cols=c(2:ncol(CorrArea_BG)), as.numeric))
+
+# Absolute Area minus Background Area
+AbsArea_BG <- allData %>% slice(which(allData[1]=="Analyte Area - Background Area"):(as.numeric(names(which(emptyRows>which(allData[1]=="Analyte Area - Background Area")))[1])-1))
+AbsArea_BG <- AbsArea_BG %>% select(-which(colSums(is.na(AbsArea_BG)) == nrow(AbsArea_BG)))
+names(AbsArea_BG) <- c("xy_filename", "Calibrated", paste("AbsArea-BG", AbsArea_BG[2,3:ncol(AbsArea_BG)], AbsArea_BG[1,3:ncol(AbsArea_BG)],sep ="_"))
+AbsArea_BG <- AbsArea_BG %>% select(-c("Calibrated"))
+AbsArea_BG <- AbsArea_BG %>% slice(3:nrow(AbsArea_BG)) %>% mutate(across(.cols=c(2:ncol(AbsArea_BG)), as.numeric))
+```
+
+## Save output to excel
+```{r Output}
+# Merge all blocks into a single table
+outputList <- list(Total_intensity, Fraction_of_spectrum_in_analytes, Fraction_of_Analyte_above_StoN_cut_off9, Fraction_of_Analyte_Area_Background_Area_above_StoN_cut_off9, StoN, IPQ, AbsPPM, PPM, CorrArea_BG, AbsArea_BG)
+output_summary <- Reduce(function(x, y) merge(x, y, all=TRUE), outputList)
+
+# Print head of table
+options(knitr.kable.NA = '...')
+kable(as.data.frame(head(output_summary[,1:6]) %>% add_column(xxx="...") %>% add_row()), caption = "Output")
+
+summary_wo_blanks<- output_summary[complete.cases(output_summary), ]
+blanks <- output_summary %>% filter(!xy_filename %in% summary_wo_blanks$xy_filename)
+
+wb <- createWorkbook()
+addWorksheet(wb, "summary")
+addWorksheet(wb, "summary_wo_blanks")
+addWorksheet(wb, "blanks")
+writeData(wb, "summary", output_summary, rowNames = FALSE, keepNA = TRUE)
+writeData(wb, "summary_wo_blanks", summary_wo_blanks, rowNames = FALSE, keepNA = TRUE)
+writeData(wb, "blanks", blanks, rowNames = FALSE, keepNA = TRUE)
+saveWorkbook(wb, file = outputFileName, overwrite = TRUE)
+```
