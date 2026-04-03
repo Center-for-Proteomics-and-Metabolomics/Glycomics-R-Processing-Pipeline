@@ -1,0 +1,112 @@
+---
+title: "Check blanks"
+author: "Marco Bladergroen"
+date: "`r Sys.Date()` version 1.1"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding, output_file = file.path(dirname(inputFile), paste0('Check blanks ',format(Sys.time(), '%Y-%m-%d %H_%M_%S'),'.html'))) })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Instructions
+
+Run this script twice. First time is to detect Samples that are blank and Blanks that appear to be not blank. Then check the excel file.
+Second time, when check is done and approved, is to delete those samples from the summary_without_blanks table, since these samples are useless in the analysis.
+
+```{r settings}
+### define the working directories
+wd <- getwd()
+### data files
+dataFileName <- "<Your output file from the MassyTools to R-Readable Data Conversion script>.xlsx" # This should be the file with the Blanks data
+sheetNameData <- "summary_wo_blanks" # This should be the sheetname that contains the non-Blanks data!! When combined with the metadata there should be no blanks indicator in the list. If so it means there are some blanks that show signal
+sheetNameBlanks <- "blanks" # This should be the sheetname that contains the blanks data. When combined with the metadata there should be no sample indicator in the list. If so it means there are some samples are empty
+dataFileName <- paste(wd, dataFileName, sep="/")
+
+metaFileName <- "<Your metaData filename>.xlsx"
+sheetNameMeta <- "metaData"
+metaFileName <- paste(wd, metaFileName, sep="/")
+
+colnameSampleId <- "<The column name that defines your Sample IDs>"
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(openxlsx)
+library(data.table)
+library(knitr)
+```
+
+```{r read_data}
+wb <- loadWorkbook(dataFileName)
+sheetNames <- names(wb)
+if("Blanks with signal" %in% sheetNames) {
+  goodData <- read.xlsx(wb, sheet=sheetNameData, colNames= TRUE, sep.names=" ")
+  metaData <- read.xlsx(metaFileName, colNames= TRUE, sep.names=" ")
+  blankData <- read.xlsx(wb, sheet=sheetNameBlanks, colNames= TRUE, sep.names=" ")
+  # select all blank samples
+  blankDataFiltered <- read.xlsx(wb, sheet="Blank Samples", colNames= TRUE, sep.names=" ")
+  # select all blanks with signal
+  blanksWithSignal <- read.xlsx(wb, sheet="Blanks with signal", colNames= TRUE, sep.names=" ")
+  removeWorksheet(wb, sheetNameData)
+  addWorksheet(wb, sheetNameData)
+  goodData <- goodData %>% filter(!xy_filename %in% blanksWithSignal$xy_filename)
+  writeData(wb, sheetNameData, goodData, rowNames = FALSE, keepNA = TRUE)
+} else {
+  # read sheets
+  goodData <- read.xlsx(wb, sheet=sheetNameData, colNames= TRUE, sep.names=" ")
+  blankData <- read.xlsx(wb, sheet=sheetNameBlanks, colNames= TRUE, sep.names=" ")
+  metaData <- read.xlsx(metaFileName, colNames= TRUE, sep.names=" ")
+  # merge metadata with tables
+  goodDataMerged <- as_tibble(right_join(metaData, goodData, by = "xy_filename"))
+  if(count(blankData)>0){
+    blankDataMerged <- as_tibble(right_join(metaData, blankData, by = "xy_filename"))
+  } else {
+    blankDataMerged <- tibble()
+  }
+  # select all non-blanks from 'blanks'-table
+  if(count(blankData)>0){
+    eval(parse(text=paste0("blankDataFiltered <- blankDataMerged %>% filter(!(tolower(", colnameSampleId, ") %like% \"blank\") & !(tolower(", colnameSampleId, ") %like% \"pbs\") & !(tolower(", colnameSampleId, ") %like% \"buffer\"))")))
+  } else {
+    blankDataFiltered <- tibble()
+  }
+  # write to excel sheet
+  addWorksheet(wb, "Blank Samples")
+  writeData(wb, "Blank Samples", blankDataFiltered, rowNames = FALSE, keepNA = TRUE)
+  
+  # select all blanks from 'samples'-table
+  eval(parse(text=paste0("blanksWithSignal <- goodDataMerged %>% filter(tolower(", colnameSampleId ,") %like% \"blank\" | tolower(", colnameSampleId ,") %like% \"pbs\" | tolower(", colnameSampleId ,") %like% \"buffer\")")))
+  # write to excel sheet
+  addWorksheet(wb, "Blanks with signal")
+  writeData(wb, "Blanks with signal", blanksWithSignal, rowNames = FALSE, keepNA = TRUE)
+}
+
+saveWorkbook(wb, file = dataFileName, overwrite = TRUE)
+```
+
+## Blank Samples
+```{r print_blank_samples}
+if(count(blankData)>0){
+  blankDataFiltered <- blankDataFiltered %>% select(c(1:7))
+  kable(as.data.frame(blankDataFiltered))
+} else {
+  print("No blanks found")
+}
+```
+
+## Blank with signal
+```{r print_blanks_with_signal}
+if(count(blanksWithSignal)>0){
+  blanksWithSignal <- blanksWithSignal %>% select(c(1:7,"Total Intensity", "Fraction of spectrum in analytes", "Fraction of Analyte above S/N cut-off (9)", "Fraction of Analyte Area - Background Area above S/N cut-off (9)"))
+  kable(as.data.frame(blanksWithSignal))
+} else {
+  print("No blanks with signal found")
+}
+```
